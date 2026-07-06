@@ -1,9 +1,10 @@
 // caddyapi.go — Caddy admin API client over its unix socket, implementing
 // deploy.Router. Routes are JSON route objects with "@id": "qc-<app>" so
 // upsert/delete address them directly via /id/qc-<app>. On first deploy the
-// route is INSERTED AT INDEX 0 of the :80 server's route list — the Caddyfile
-// boot config ends in a catch-all respond, so appended routes would never
-// match; on redeploy it is PATCHed in place, one atomic request.
+// route is INSERTED AT INDEX 0 of the public server's route list (the :443
+// server under TLS, else the :80 one — see pickPublicServer); appended routes
+// could sit behind a catch-all and never match. On redeploy it is PATCHed in
+// place, one atomic request.
 package caddyapi
 
 import (
@@ -166,16 +167,18 @@ func routeJSON(app, host, dial string) ([]byte, error) {
 	return body, nil
 }
 
-// pickPublicServer returns the name of the server whose listen addresses
-// include ":80", given the GET /config/apps/http/servers response. Fails
-// loud in two cases, because a wrong target silently blackholes app traffic:
-// no :80 server at all (e.g. only the metrics-only :2019 one), or a SEPARATE
-// server listening on :443. The latter is the auto-HTTPS topology a real
-// site block creates (M6): the :80 server becomes the HTTP-redirect server,
-// so a route programmed there leaves the app dark over HTTPS while deploys
-// still report live. This client only understands the plain-HTTP baseline —
-// extend its targeting before enabling TLS. A single server listening on
-// both :80 and :443 is fine: one route there serves both.
+// pickPublicServer returns the name of the server app routes belong in,
+// given the GET /config/apps/http/servers response. Preference order:
+//
+//  1. The :443 server — the TLS topology a real site block creates (the
+//     Caddyfile's sparboard.com block). Routes there are served over HTTPS
+//     with a per-hostname cert auto-provisioned when the route lands, and
+//     the :80 server's catch-all 308 bounces HTTP traffic up to them.
+//  2. Otherwise the :80 server — the plain-HTTP baseline before any domain.
+//
+// Fails loud when neither exists (e.g. only the metrics-only :2019 server)
+// and when MORE than one server listens on :443 — an ambiguous target would
+// silently blackhole app traffic, which is worse than a failed deploy.
 func pickPublicServer(serversJSON []byte) (string, error) {
 	var servers map[string]struct {
 		Listen []string `json:"listen"`
@@ -190,24 +193,25 @@ func pickPublicServer(serversJSON []byte) (string, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	picked := ""
+
+	var tlsServers []string
+	for _, name := range names {
+		if slices.Contains(servers[name].Listen, ":443") {
+			tlsServers = append(tlsServers, name)
+		}
+	}
+	if len(tlsServers) > 1 {
+		return "", fmt.Errorf("multiple servers listen on :443 (%s): ambiguous route target", strings.Join(tlsServers, ", "))
+	}
+	if len(tlsServers) == 1 {
+		return tlsServers[0], nil
+	}
 	for _, name := range names {
 		if slices.Contains(servers[name].Listen, ":80") {
-			picked = name
-			break
+			return name, nil
 		}
 	}
-	if picked == "" {
-		return "", fmt.Errorf("no server listening on :80 in caddy config (servers: %s)", strings.Join(names, ", "))
-	}
-	for _, name := range names {
-		if name != picked && slices.Contains(servers[name].Listen, ":443") {
-			return "", fmt.Errorf(
-				"server %s listens on :443 separately from the :80 server %s: TLS topology detected — routes into :80 would leave apps dark over HTTPS; extend caddyapi route targeting before enabling TLS",
-				name, picked)
-		}
-	}
-	return picked, nil
+	return "", fmt.Errorf("no server listening on :443 or :80 in caddy config (servers: %s)", strings.Join(names, ", "))
 }
 
 // deleteID removes the config object registered under id. 404 (unknown

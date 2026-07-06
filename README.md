@@ -10,7 +10,7 @@ off-the-shelf software, wired together by the config in this repo.
 ## Architecture
 
 ```
-                    internet
+          internet  (sparboard.com, *.sparboard.com)
                        │ 80/443 (only public ports)
                  ┌─────▼─────┐
                  │   Caddy   │  auto-TLS, routing, JSON access logs
@@ -106,9 +106,9 @@ Order matters; each step fails loud if a dependency is missing.
 | --- | ----------------------------------------------------------- | ------ |
 | M0  | Host baseline: UFW, fail2ban, sshd, Docker, Tailscale        | ✅     |
 | M1  | Edge: Caddy auto-TLS + admin API                             | ✅     |
-| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | 🟡 stack live; backups await R2 creds |
-| M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | 🟡 all up except Alertmanager (awaits Discord webhook) |
-| M4  | controld core: Docker SDK, Caddy client, deploy state machine| —      |
+| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | 🟡 stack live; backups await R2 API keys |
+| M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | ✅ pager drill 2026-07-06: real outage → Discord page → resolved |
+| M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
 | M5  | controld dashboard (templ + htmx)                            | —      |
 | M6  | Onboard first real app                                       | —      |
 | M7  | SLOs + error-budget burn alerts                              | —      |

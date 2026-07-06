@@ -20,23 +20,36 @@
 	}
 }
 
-# No domain yet: plain HTTP placeholder. Admin-API routes inserted into this
-# :80 server are HTTP-only — they never activate auto-TLS (no :443 server, no
-# cert issuance; the published 443 port is a dead end until then). Auto-TLS
-# starts when a site block with a real hostname is added (M6). That splits
-# the config into a :443 server plus a :80 redirect server — a topology
-# controld's route targeting does not support yet, and caddyapi fails the
-# deploy loud when it sees it rather than routing apps into the redirect
-# server (reachable over HTTP, dark over HTTPS).
-:80 {
-	# JSON access logs to stdout for Loki (M3).
+# The platform domain. This site block is what creates the :443 server and
+# turns on auto-TLS (Let's Encrypt); controld inserts each app's route into
+# that same :443 server, and Caddy auto-provisions a cert per app hostname
+# when the route lands (needs the app's DNS record pointing here first).
+sparboard.com {
 	log {
 		output stdout
 		format json
 	}
 
-	respond /healthz 200
 	respond "qincloud edge ok" 200
+}
+
+# HTTP side: keep the health endpoint for the container healthcheck, bounce
+# everything else to HTTPS. Explicitly claiming :80 means Caddy does NOT
+# generate its own redirect server; this one block is the whole HTTP story.
+# ACME HTTP-01 challenges never reach these routes — Caddy intercepts
+# /.well-known/acme-challenge/ ahead of the configured handlers.
+:80 {
+	log {
+		output stdout
+		format json
+	}
+
+	handle /healthz {
+		respond 200
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
 }
 
 # Metrics-only listener so Prometheus can keep scraping caddy:2019 over

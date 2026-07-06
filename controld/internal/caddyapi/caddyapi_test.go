@@ -85,18 +85,40 @@ func TestPickPublicServerFailsLoudWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestPickPublicServerRejectsSplitTLSTopology(t *testing.T) {
-	// The auto-HTTPS shape a real site block generates (M6): a :443 server
-	// plus a separate :80 redirect server. Routing into :80 there would
-	// leave the app dark over HTTPS with the deploy still reporting live —
-	// the pick must fail loud instead.
-	blob := `{"srv0": {"listen": [":443"]}, "srv1": {"listen": [":80"]}, "srv2": {"listen": [":2019"]}}`
+// adaptedServersTLS is the "servers" object Caddy 2.10 generates from the
+// TLS-era Caddyfile (sparboard.com site block + :80 redirect + :2019
+// metrics) — captured from `caddy adapt` on the box, routes elided since
+// selection only reads listen addresses.
+const adaptedServersTLS = `{
+  "srv0": {"listen": [":2019"]},
+  "srv1": {"listen": [":443"], "routes": [{"match": [{"host": ["sparboard.com"]}], "terminal": true}]},
+  "srv2": {"listen": [":80"]}
+}`
+
+func TestPickPublicServerTargetsTLSServer(t *testing.T) {
+	// The auto-HTTPS topology a real site block creates: routes must land in
+	// the :443 server (per-host certs auto-provision there); the :80 server
+	// only bounces HTTP up to it, and a route there would be dark over HTTPS.
+	name, err := pickPublicServer([]byte(adaptedServersTLS))
+	if err != nil {
+		t.Fatalf("pickPublicServer: %v", err)
+	}
+	if name != "srv1" {
+		t.Fatalf("picked %q, want srv1 (the :443 server, not the :80 redirect or :2019 metrics)", name)
+	}
+}
+
+func TestPickPublicServerRejectsAmbiguousTLS(t *testing.T) {
+	// Two :443 servers means this client cannot know where app traffic
+	// terminates — an arbitrary pick would silently blackhole apps, so the
+	// deploy must fail loud instead.
+	blob := `{"a": {"listen": [":443"]}, "b": {"listen": [":443", ":80"]}}`
 	_, err := pickPublicServer([]byte(blob))
 	if err == nil {
-		t.Fatal("want error when a separate server listens on :443")
+		t.Fatal("want error when multiple servers listen on :443")
 	}
 	if !strings.Contains(err.Error(), ":443") {
-		t.Fatalf("error %q should name the :443 topology as the cause", err)
+		t.Fatalf("error %q should name the ambiguous :443 topology", err)
 	}
 }
 
