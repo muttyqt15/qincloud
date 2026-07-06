@@ -205,7 +205,11 @@ services:
 
 secrets:
   discord_webhook:
-    file: /opt/qincloud/secrets/discord_webhook # gitignored; create before first up
+    # gitignored; create before first up. Compose bind-mounts this file with its
+    # HOST permissions, and alertmanager runs as nobody (65534) — so it must be
+    # chown 65534:65534 + chmod 400, or notify fails with "permission denied":
+    #   install -o 65534 -g 65534 -m 400 <src> /opt/qincloud/secrets/discord_webhook
+    file: /opt/qincloud/secrets/discord_webhook
 
 networks:
   obs: {} # project-internal scrape/query plane; nothing outside this stack needs it
