@@ -91,9 +91,13 @@ Order matters; each step fails loud if a dependency is missing.
 6. **Restore from R2** — the real restore is manual by design
    (`restore-drill.sh` only rehearses into a throwaway container, never the
    real cluster). Fetch the newest `postgres/_globals/` and per-database
-   `postgres/<db>/` objects (rclone env config as in `backup.sh`), then
-   `psql` the globals and `pg_restore --create` each database into
-   `qincloud-postgres`.
+   `postgres/<db>/` objects (rclone env config as in `backup.sh`), `psql`
+   the globals (errors on pre-existing roles are noise; the ALTER ROLEs
+   reset passwords to the backed-up values), then restore each database
+   INTO the one initdb already created — not `--create`:
+   `pg_restore --clean --if-exists --no-owner --role=<owning-role> -d <db>`
+   (`--no-owner --role=controld` also migrates dumps taken under an older
+   superuser-owned layout onto the dedicated role).
 7. **stack/observability** — up; then install the backup schedule:
    `cp scripts/systemd/qincloud-backup.* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now qincloud-backup.timer`
 8. **stack/controld** — up (`--build`). `controld list` shows which apps the
@@ -114,6 +118,6 @@ Order matters; each step fails loud if a dependency is missing.
 | M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history + deploy/redeploy/destroy on :8600 (tailnet) |
 | M6  | Onboard first real app                                       | —      |
 | M7  | SLOs + error-budget burn alerts                              | —      |
-| M8  | DR rehearsal: restore drill, measured RTO/RPO                | 🟡 restore drill ✅ (RTO 4s, RPO ≤24h); full box-rebuild rehearsal pending |
+| M8  | DR rehearsal: restore drill, measured RTO/RPO                | ✅ full box rebuild 2026-07-06: wipe → serving in ≈12 min ([drill](runbooks/drills/2026-07-06-m8-box-rebuild-drill.md)) |
 | M9  | Failure drills + blameless postmortems                       | —      |
 | M10 | Agent-ops                                                    | —      |

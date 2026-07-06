@@ -32,6 +32,23 @@ post-upload size check via `lsl`).
 rclone probes bucket existence by default and fails on a bucket-scoped token.
 `RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true` (set in `backup.sh`).
 
+## Restore into the DB initdb made — never `pg_restore --create`
+
+A fresh data stack's initdb already creates the `controld`/`qincloud`
+databases, so `--create` fails. The proven shape (M8 drill):
+`pg_restore --clean --if-exists --no-owner --role=<owning-role> -d <db>`.
+`--no-owner --role=X` doubles as the ownership migration when the dump was
+taken under an older layout (superuser-owned tables → dedicated role).
+
+## Repo ahead of box turns DR into a migration
+
+If a stack's compose/env contract changes in the repo (new `${VAR:?}`, new
+role, renamed volume) and the running box isn't reconciled in the same
+sitting, the rebuild path — which always follows the repo — inherits an
+unplanned migration mid-outage. The M8 drill hit exactly this
+(`CONTROLD_DB_PASSWORD` + dedicated role existed only in the repo).
+Reconcile immediately, or note the migration step in the rebuild section.
+
 ## Restore rule: globals reset role passwords to the *backed-up* values
 
 `pg_globals` restore rewrites every role password. On a box rebuild, `.env`

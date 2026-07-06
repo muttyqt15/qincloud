@@ -20,6 +20,18 @@ The provider's Ubuntu image ships without `curl`. `bootstrap.sh` installs its
 own dependencies first; any new script should declare and check its deps
 (`command -v`) rather than assume.
 
+## `compose down` needs the same env vars as `up`
+
+`${VAR:?}` interpolation runs on every compose command — a missing variable
+blocks even teardown. Dummy-set the var or `docker rm -f` the containers
+directly when dismantling a stack whose env contract has moved on.
+
+## docker.io pulls are flaky from this VPS
+
+TLS handshake timeouts against registry-1.docker.io come and go. Any
+procedure that pulls many images (rebuild, new stack) needs a retry loop;
+consider a registry mirror if it worsens.
+
 ## Residual risk (open)
 
 Public `:22` is still open (rate-limited, key-only). Once comfortable with
