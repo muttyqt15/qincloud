@@ -1,0 +1,7 @@
+# Only the notes-site build uses the repo root as its Docker context. Keep that
+# context tiny: everything is ignored except the vault and the site scaffold.
+# (Other images — controld — build from their own subdirectory context, which
+# this file does not affect.)
+*
+!learnings
+!sites
