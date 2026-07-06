@@ -58,7 +58,10 @@ the others.
 2. **Only Caddy publishes public ports** (80/443). Docker-published ports
    bypass UFW, so the rule is "don't publish", not "firewall it later".
 3. **Admin surfaces** (Grafana, Prometheus, controld) bind to the Tailscale
-   IP only.
+   IP only — with one deliberate exception: the controld dashboard is also
+   published at https://dash.sparboard.com behind Caddy `basic_auth`
+   (`DASH_PASSWORD_HASH` in `.env`), proxied over the `admin_net` bridge
+   that carries only caddy + controld + prometheus.
 4. **The box is disposable.** `bootstrap.sh` + `git clone` + restore-from-R2
    must rebuild it from zero. Never hand-edit the running system.
 
@@ -102,9 +105,10 @@ Order matters; each step fails loud if a dependency is missing.
    `cp scripts/systemd/qincloud-backup.* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now qincloud-backup.timer`
 8. **stack/controld** — up (`--build`). `controld list` shows which apps the
    restored database says should exist.
-9. **Redeploy every app** — `controld deploy` each one: the rebuilt Caddy has
-   no autosave so no app routes exist yet, and the app containers are gone —
-   a deploy recreates both.
+9. **Redeploy every app** — `controld redeploy -app <name>` for each app in
+   `controld list`: the rebuilt Caddy has no autosave so no app routes exist
+   yet, and the app containers are gone — a redeploy recreates both from the
+   restored spec (env included; never re-type `-env` values by hand).
 10. **Close public ssh** — `scripts/close-public-ssh.sh` (refuses to run
     unless tailscale is up). From here sshd answers on the tailnet only;
     recovery without tailscale = provider web console → `ufw limit 22/tcp`.
@@ -118,7 +122,7 @@ Order matters; each step fails loud if a dependency is missing.
 | M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | ✅ nightly timer live; BackupStale alert armed |
 | M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | ✅ pager drill 2026-07-06: real outage → Discord page → resolved |
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
-| M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history + deploy/redeploy/destroy on :8600 (tailnet) |
+| M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history/stats/logs + deploy/redeploy/destroy; tailnet :8600 + https://dash.sparboard.com (basic auth) |
 | M6  | Onboard first real app                                       | ✅ Umami analytics live at analytics.sparboard.com ([runbook](runbooks/apps/umami.md)); AppSpec env + tenant_db_net |
 | M7  | SLOs + error-budget burn alerts                              | —      |
 | M8  | DR rehearsal: restore drill, measured RTO/RPO                | ✅ full box rebuild 2026-07-06: wipe → serving in ≈12 min ([drill](runbooks/drills/2026-07-06-m8-box-rebuild-drill.md)) |

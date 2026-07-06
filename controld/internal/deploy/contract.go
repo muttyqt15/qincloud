@@ -87,6 +87,17 @@ type Docker interface {
 	RemoveContainer(ctx context.Context, nameOrID string) error
 }
 
+// ContainerStats is one resource snapshot, shaped for display and export.
+// Produced by dockerx, consumed by the dashboard (its Runtime interface) —
+// it lives here as the shared domain type, deliberately NOT as methods on
+// Docker: the deploy state machine never reads stats, and its contract
+// should not grow observability the fakes would have to stub.
+type ContainerStats struct {
+	CPUPercent float64 // of one core; can exceed 100 on multi-core usage
+	MemBytes   int64   // working set (usage minus inactive file cache)
+	MemLimit   int64   // the container's memory cap
+}
+
 // Router programs the edge (Caddy admin API over its unix socket).
 type Router interface {
 	// UpsertRoute makes requests for host reverse-proxy to dial

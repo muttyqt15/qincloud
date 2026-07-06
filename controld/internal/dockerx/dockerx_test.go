@@ -126,3 +126,56 @@ func TestDecideReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestCalcStats(t *testing.T) {
+	base := func() container.StatsResponse {
+		var r container.StatsResponse
+		r.CPUStats.CPUUsage.TotalUsage = 2_000_000_000
+		r.PreCPUStats.CPUUsage.TotalUsage = 1_000_000_000
+		r.CPUStats.SystemUsage = 20_000_000_000
+		r.PreCPUStats.SystemUsage = 10_000_000_000
+		r.CPUStats.OnlineCPUs = 4
+		r.MemoryStats.Usage = 300 << 20
+		r.MemoryStats.Stats = map[string]uint64{"inactive_file": 44 << 20}
+		r.MemoryStats.Limit = 512 << 20
+		return r
+	}
+
+	t.Run("normal sample", func(t *testing.T) {
+		s := calcStats(base())
+		if s.CPUPercent != 40 { // 1e9/10e9 * 4 cpus * 100
+			t.Fatalf("cpu = %v, want 40", s.CPUPercent)
+		}
+		if s.MemBytes != 256<<20 {
+			t.Fatalf("mem = %d, want %d (usage minus inactive_file)", s.MemBytes, 256<<20)
+		}
+		if s.MemLimit != 512<<20 {
+			t.Fatalf("limit = %d, want %d", s.MemLimit, 512<<20)
+		}
+	})
+
+	t.Run("zero system delta yields zero cpu, not NaN", func(t *testing.T) {
+		r := base()
+		r.CPUStats.SystemUsage = r.PreCPUStats.SystemUsage
+		if s := calcStats(r); s.CPUPercent != 0 {
+			t.Fatalf("cpu = %v, want 0", s.CPUPercent)
+		}
+	})
+
+	t.Run("inactive_file larger than usage does not underflow", func(t *testing.T) {
+		r := base()
+		r.MemoryStats.Stats["inactive_file"] = r.MemoryStats.Usage + 1
+		if s := calcStats(r); s.MemBytes != 0 {
+			t.Fatalf("mem = %d, want 0", s.MemBytes)
+		}
+	})
+
+	t.Run("no online cpus falls back to percpu list", func(t *testing.T) {
+		r := base()
+		r.CPUStats.OnlineCPUs = 0
+		r.CPUStats.CPUUsage.PercpuUsage = []uint64{1, 1}
+		if s := calcStats(r); s.CPUPercent != 20 {
+			t.Fatalf("cpu = %v, want 20 (2 cpus)", s.CPUPercent)
+		}
+	})
+}

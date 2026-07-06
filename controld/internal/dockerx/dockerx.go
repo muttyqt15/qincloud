@@ -9,10 +9,13 @@
 package dockerx
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +26,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"qincloud/controld/internal/deploy"
 )
@@ -273,6 +277,102 @@ func lastHealthLine(h *container.Health) string {
 		}
 	}
 	return "no health log output"
+}
+
+// Stats returns one resource snapshot. stream=false makes the daemon take
+// two samples ~1s apart so a CPU rate is computable — callers should treat
+// this as a ~1s blocking call and poll accordingly.
+func (c *Client) Stats(ctx context.Context, containerID string) (deploy.ContainerStats, error) {
+	resp, err := c.api.ContainerStats(ctx, containerID, false)
+	if err != nil {
+		return deploy.ContainerStats{}, fmt.Errorf("stats %s: %w", containerID, err)
+	}
+	defer resp.Body.Close()
+	var raw container.StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return deploy.ContainerStats{}, fmt.Errorf("decode stats %s: %w", containerID, err)
+	}
+	// The daemon answers 200 with an all-zero StatsResponse (no error) for a
+	// container that is stopped or crash-looping. Treat that sentinel as the
+	// error it really is — otherwise the caller shows "0% / 0 MiB" and the
+	// exporter reports up=1 for a dead app. The zero Read timestamp is the
+	// tell: a real sample always stamps it.
+	if raw.Read.IsZero() {
+		return deploy.ContainerStats{}, fmt.Errorf("stats %s: container not running", containerID)
+	}
+	return calcStats(raw), nil
+}
+
+// calcStats reduces a raw daemon sample to the display numbers, the same way
+// `docker stats` does: CPU% from the delta between the two samples scaled by
+// online CPUs; memory = usage minus inactive file cache (cgroup v2's
+// "working set" — plain usage counts reclaimable page cache and reads scary).
+func calcStats(raw container.StatsResponse) deploy.ContainerStats {
+	s := deploy.ContainerStats{
+		MemLimit: int64(raw.MemoryStats.Limit),
+	}
+	if raw.MemoryStats.Usage > 0 {
+		inactive := raw.MemoryStats.Stats["inactive_file"]
+		if inactive < raw.MemoryStats.Usage {
+			s.MemBytes = int64(raw.MemoryStats.Usage - inactive)
+		}
+	}
+	cpuDelta := float64(raw.CPUStats.CPUUsage.TotalUsage) - float64(raw.PreCPUStats.CPUUsage.TotalUsage)
+	sysDelta := float64(raw.CPUStats.SystemUsage) - float64(raw.PreCPUStats.SystemUsage)
+	if cpuDelta > 0 && sysDelta > 0 {
+		cpus := float64(raw.CPUStats.OnlineCPUs)
+		if cpus == 0 {
+			cpus = float64(len(raw.CPUStats.CPUUsage.PercpuUsage))
+		}
+		if cpus > 0 {
+			s.CPUPercent = cpuDelta / sysDelta * cpus * 100
+		}
+	}
+	return s
+}
+
+// Logs returns the last tail lines of stdout+stderr interleaved. The stream
+// is docker-multiplexed (no TTY on app containers) — stdcopy demuxes it;
+// both channels land in one buffer, capped so a log-flooding app cannot
+// balloon a dashboard request.
+func (c *Client) Logs(ctx context.Context, containerID string, tail int) (string, error) {
+	rc, err := c.api.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       strconv.Itoa(tail),
+	})
+	if err != nil {
+		return "", fmt.Errorf("logs %s: %w", containerID, err)
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	limited := &limitedWriter{w: &buf, n: maxLogBytes}
+	if _, err := stdcopy.StdCopy(limited, limited, rc); err != nil && !errors.Is(err, errLogCap) {
+		return "", fmt.Errorf("read logs %s: %w", containerID, err)
+	}
+	return buf.String(), nil
+}
+
+// maxLogBytes caps one logs response; 100 tail lines fit comfortably, a
+// megabyte-long single line does not get to hurt the dashboard.
+const maxLogBytes = 256 << 10
+
+var errLogCap = errors.New("log cap reached")
+
+type limitedWriter struct {
+	w *bytes.Buffer
+	n int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if len(p) > l.n {
+		l.w.Write(p[:l.n])
+		l.n = 0
+		return len(p), errLogCap // pretend full write so StdCopy stops cleanly
+	}
+	l.w.Write(p)
+	l.n -= len(p)
+	return len(p), nil
 }
 
 // RemoveContainer stops (10s grace) and removes one container by name or ID.

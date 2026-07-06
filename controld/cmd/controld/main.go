@@ -38,6 +38,8 @@ func main() {
 		err = serve()
 	case "deploy":
 		err = deployCmd(os.Args[2:])
+	case "redeploy":
+		err = redeployCmd(os.Args[2:])
 	case "list":
 		err = listCmd()
 	case "destroy":
@@ -51,12 +53,14 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: controld <serve | deploy | list | destroy>
+	fmt.Fprintln(os.Stderr, `usage: controld <serve | deploy | redeploy | list | destroy>
   serve
-  deploy  -app <name> -image <ref> -port <containerPort> -host <hostname>
-          [-db] [-env KEY=VALUE ...]
+  deploy   -app <name> -image <ref> -port <containerPort> -host <hostname>
+           [-db] [-env KEY=VALUE ...]
+  redeploy -app <name>   re-run the STORED spec (env included) — the safe way
+                         to restore routes after a caddy reload or rebuild
   list
-  destroy -app <name>`)
+  destroy  -app <name>`)
 	os.Exit(2)
 }
 
@@ -66,7 +70,7 @@ func usage() {
 // cold boot race, and the healthcheck makes the looping visible.
 func serve() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	d, st, cleanup, err := wire(ctx)
+	d, st, dk, cleanup, err := wire(ctx)
 	cancel()
 	if err != nil {
 		return err
@@ -77,7 +81,7 @@ func serve() error {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	dashboard.New(st, d).Register(mux)
+	dashboard.New(st, d, dk).Register(mux)
 	srv := &http.Server{
 		Addr:    ":8600",
 		Handler: mux,
@@ -90,28 +94,29 @@ func serve() error {
 }
 
 // wire builds the deployer from its four capabilities. Linear, no factories:
-// this is the entire dependency graph of the control plane. The store comes
-// back alongside the deployer — the dashboard reads history through it.
-func wire(ctx context.Context) (*deploy.Deployer, *store.Store, func(), error) {
+// this is the entire dependency graph of the control plane. The store and
+// docker client come back alongside the deployer — the dashboard reads
+// history through the store and live stats/logs through the docker client.
+func wire(ctx context.Context) (*deploy.Deployer, *store.Store, *dockerx.Client, func(), error) {
 	dsn := mustEnv("CONTROLD_DSN")
 	st, err := store.Connect(ctx, dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("store: %w", err)
 	}
 	if err := st.Init(ctx); err != nil {
 		st.Close()
-		return nil, nil, nil, fmt.Errorf("apply schema: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("apply schema: %w", err)
 	}
 	dk, err := dockerx.New()
 	if err != nil {
 		st.Close()
-		return nil, nil, nil, fmt.Errorf("docker: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("docker: %w", err)
 	}
 	rt := caddyapi.New(envOr("CADDY_ADMIN_SOCK", "/run/caddy/admin.sock"))
 	// Per-app cross-process lock, on the same database the store uses.
 	lk := &pgAppLock{dsn: dsn}
 	cleanup := func() { st.Close(); _ = dk.Close() }
-	return deploy.New(dk, rt, st, lk), st, cleanup, nil
+	return deploy.New(dk, rt, st, lk), st, dk, cleanup, nil
 }
 
 func deployCmd(args []string) error {
@@ -137,7 +142,7 @@ func deployCmd(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	d, _, cleanup, err := wire(ctx)
+	d, _, _, cleanup, err := wire(ctx)
 	if err != nil {
 		return err
 	}
@@ -146,6 +151,31 @@ func deployCmd(args []string) error {
 		return err
 	}
 	log.Printf("%s is live: http://%s → %s", spec.Name, spec.Host, spec.Image)
+	return nil
+}
+
+// redeployCmd re-runs an app's stored spec. Exists so route-restore dances
+// (caddy reload, box rebuild) never re-type env values on the command line —
+// hand-retyping a deploy's -env flags is how a stored secret gets clobbered.
+func redeployCmd(args []string) error {
+	fs := flag.NewFlagSet("redeploy", flag.ExitOnError)
+	app := fs.String("app", "", "app name")
+	_ = fs.Parse(args)
+	if *app == "" {
+		return fmt.Errorf("-app is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	d, _, _, cleanup, err := wire(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := d.Redeploy(ctx, *app); err != nil {
+		return err
+	}
+	log.Printf("%s redeployed from its stored spec", *app)
 	return nil
 }
 
@@ -192,7 +222,7 @@ func destroyCmd(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	d, _, cleanup, err := wire(ctx)
+	d, _, _, cleanup, err := wire(ctx)
 	if err != nil {
 		return err
 	}

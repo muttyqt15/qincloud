@@ -1,8 +1,8 @@
 # stack/edge/compose.yml — Caddy edge proxy. The ONLY stack allowed to publish
 # public ports (80/443); everything else stays on bridge networks behind it.
 #
-# Run on the box:
-#   docker compose --project-directory /opt/qincloud/stack/edge up -d
+# Run on the box (env-file REQUIRED since the dash.sparboard.com auth hash):
+#   docker compose --project-directory /opt/qincloud/stack/edge --env-file /opt/qincloud/.env up -d
 
 services:
   caddy:
@@ -25,6 +25,16 @@ services:
     # Note --resume does not cover a rebuilt box (fresh volume, no autosave):
     # restoring routes from the controld DB needs a reconcile in controld.
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume
+    environment:
+      # bcrypt hash for the dash.sparboard.com basic_auth (Caddyfile reads it
+      # at runtime as {env.DASH_PASSWORD_HASH}). Generate:
+      #   docker exec edge-caddy-1 caddy hash-password --plaintext '<password>'
+      # CRITICAL: a bcrypt hash is "$2a$14$...". Compose interpolates $ in
+      # .env values, so the raw hash gets mangled (every "$x" eaten as an
+      # empty variable) and basic_auth then rejects the correct password.
+      # Store it in /opt/qincloud/.env with every $ DOUBLED:
+      #   DASH_PASSWORD_HASH=$$2a$$14$$...
+      DASH_PASSWORD_HASH: ${DASH_PASSWORD_HASH:?set DASH_PASSWORD_HASH in /opt/qincloud/.env}
     ports:
       - "80:80"
       - "443:443"
@@ -34,6 +44,10 @@ services:
     # mount of the socket. :2019 serves only read-only Prometheus metrics.
     networks:
       - app_net
+      # admin_net carries ONLY caddy ↔ controld ↔ prometheus: the dashboard
+      # proxy path and the controld /metrics scrape. Tenant apps (app_net)
+      # can reach neither controld nor prometheus through it.
+      - admin_net
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # /data holds certs + ACME account — must survive recreation or we
@@ -57,6 +71,8 @@ services:
 networks:
   app_net:
     external: true
+  admin_net:
+    external: true # created by bootstrap.sh
 
 volumes:
   caddy_data:

@@ -1,9 +1,13 @@
 // dashboard.go — the M5 web dashboard, mounted by `controld serve` on :8600.
-// Reachability is the auth model: compose binds the port to the Tailscale IP
-// only, same as Grafana/Prometheus (invariant #3). Server-rendered templ
-// views + htmx; all deploy state lives in Postgres — the deploys table is the
-// single status projection and the UI only ever re-reads it, so a dashboard
-// restart loses nothing.
+// Two ingress paths: (1) TS_IP:8600, the unauthenticated tailnet path
+// (reachability is the auth model there, same as Grafana/Prometheus,
+// invariant #3); (2) https://dash.sparboard.com, public, behind Caddy
+// basic_auth, proxied over admin_net (deliberate operator decision
+// 2026-07-06). Every state-changing route additionally requires the
+// HX-Request header (requireHtmx) so neither path is CSRF-forgeable.
+// Server-rendered templ views + htmx; all deploy state lives in Postgres —
+// the deploys table is the single status projection and the UI only ever
+// re-reads it, so a dashboard restart loses nothing.
 package dashboard
 
 import (
@@ -52,6 +56,14 @@ type Store interface {
 	LatestDeploys(ctx context.Context) (map[string]deploy.DeployRecord, error)
 }
 
+// Runtime is the live-container observability surface — implemented by
+// *dockerx.Client. Read-only; the dashboard renders what it returns but
+// never mutates through it.
+type Runtime interface {
+	Stats(ctx context.Context, containerID string) (deploy.ContainerStats, error)
+	Logs(ctx context.Context, containerID string, tail int) (string, error)
+}
+
 // Deployer is the action surface — implemented by *deploy.Deployer.
 type Deployer interface {
 	Deploy(ctx context.Context, spec deploy.AppSpec) error
@@ -66,11 +78,12 @@ type Deployer interface {
 type Server struct {
 	store    Store
 	deployer Deployer
+	runtime  Runtime
 	fastFail time.Duration // fastFailWindow; tests shrink it
 }
 
-func New(st Store, d Deployer) *Server {
-	return &Server{store: st, deployer: d, fastFail: fastFailWindow}
+func New(st Store, d Deployer, rt Runtime) *Server {
+	return &Server{store: st, deployer: d, runtime: rt, fastFail: fastFailWindow}
 }
 
 //go:embed static
@@ -84,6 +97,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /apps", s.appList)
 	mux.HandleFunc("GET /apps/{name}", s.appDetail)
 	mux.HandleFunc("GET /apps/{name}/history", s.appHistory)
+	mux.HandleFunc("GET /apps/{name}/stats", s.appStats)
+	mux.HandleFunc("GET /apps/{name}/logs", s.appLogs)
+	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("POST /deploy", requireHtmx(s.deploy))
 	mux.HandleFunc("POST /apps/{name}/redeploy", requireHtmx(s.redeploy))
 	mux.HandleFunc("POST /apps/{name}/destroy", requireHtmx(s.destroy))

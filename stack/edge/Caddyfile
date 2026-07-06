@@ -33,6 +33,31 @@ sparboard.com {
 	respond "qincloud edge ok" 200
 }
 
+# The controld dashboard, deliberately public (operator decision 2026-07-06)
+# behind edge basic auth — the dashboard drives docker.sock, so this site
+# block is a root-equivalent door: the bcrypt hash comes from the caddy
+# process env (DASH_PASSWORD_HASH via compose ← /opt/qincloud/.env), and
+# caddy reaches controld over admin_net, a bridge carrying only caddy,
+# controld, and prometheus. The TS_IP:8600 binding stays as the no-auth
+# tailnet path.
+dash.sparboard.com {
+	log {
+		output stdout
+		format json
+	}
+
+	# {env.*} is a RUNTIME placeholder, not adapt-time {$...}: the hash stays a
+	# placeholder in autosave.json and Caddy resolves it from the process env
+	# on each provision, so rotating DASH_PASSWORD_HASH + recreating the
+	# container actually takes effect (an adapt-time value would be frozen in
+	# the autosave that --resume boots from).
+	basic_auth {
+		admin {env.DASH_PASSWORD_HASH}
+	}
+
+	reverse_proxy qincloud-controld:8600
+}
+
 # HTTP side: keep the health endpoint for the container healthcheck, bounce
 # everything else to HTTPS. Explicitly claiming :80 means Caddy does NOT
 # generate its own redirect server; this one block is the whole HTTP story.
@@ -52,14 +77,23 @@ sparboard.com {
 	}
 }
 
-# Metrics-only listener so Prometheus can keep scraping caddy:2019 over
-# app_net. Read-only exposition endpoint — the mutable admin API is NOT here.
+# Metrics-only listener for Prometheus. Caddy is on app_net (to proxy tenant
+# apps) AND admin_net, and this listener binds every interface — so without a
+# guard any tenant container on app_net could scrape it and enumerate every
+# co-tenant upstream + the control-plane's internal address. Gate it to the
+# admin_net subnet (fixed in bootstrap.sh); Prometheus scrapes from there.
 :2019 {
-	handle /metrics {
-		metrics
+	@admin remote_ip 10.201.7.0/24
+	handle @admin {
+		handle /metrics {
+			metrics
+		}
+		handle {
+			respond 404
+		}
 	}
-	# Fail loud on anything else — admin paths (/load, /config/) are gone.
+	# Anyone else (a tenant app on app_net) gets nothing.
 	handle {
-		respond 404
+		respond 403
 	}
 }

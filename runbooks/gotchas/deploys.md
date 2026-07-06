@@ -35,6 +35,14 @@ a destroy can win the lock between read and deploy, and the stale spec then
 `Deployer.Redeploy(name)` reads the spec inside the lock; callers (dashboard,
 future CLI) pass only the name. Never GetApp-then-Deploy around it.
 
+## Never re-type env on a redeploy — use `controld redeploy`
+
+Restoring routes (after a caddy reload or rebuild) by re-running `deploy`
+with hand-typed `-env` flags is how a stored secret gets clobbered — it
+happened live (umami's `APP_SECRET`, 2026-07-06). `controld redeploy -app X`
+re-runs the STORED spec, env included, under the app lock. `deploy` with
+full flags is only for genuinely new specs.
+
 ## Everything after the route switch runs detached
 
 Once the new container is routed, the deploy has succeeded in the world —

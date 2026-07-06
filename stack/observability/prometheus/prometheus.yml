@@ -49,6 +49,14 @@ scrape_configs:
     static_configs:
       - targets: [cadvisor:8080]
 
+  # Per-APP resource gauges (qincloud_app_*) with app="<name>" labels —
+  # controld samples its own containers over docker.sock. cAdvisor's series
+  # only carry container IDs under the containerd image store; these are the
+  # human-facing ones. Reached over admin_net.
+  - job_name: controld
+    static_configs:
+      - targets: [qincloud-controld:8600]
+
   - job_name: postgres
     static_configs:
       - targets: [postgres-exporter:9187]

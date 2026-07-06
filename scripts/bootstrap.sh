@@ -12,6 +12,11 @@ log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 trap 'die "failed at line $LINENO: $BASH_COMMAND"' ERR
 
+# Fixed subnet for admin_net so Caddy's :2019 metrics block can allow only
+# this range (see stack/edge/Caddyfile). Kept in a Docker-private range that
+# does not clash with the default bridge pools.
+readonly ADMIN_NET_SUBNET=10.201.7.0/24
+
 [[ $EUID -eq 0 ]] || die "must run as root"
 . /etc/os-release
 [[ $ID == ubuntu ]] || die "expected Ubuntu, got $ID"
@@ -82,6 +87,14 @@ log "docker bridge networks: app_net, data_net, tenant_db_net"
 for net in app_net data_net tenant_db_net; do
   docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null
 done
+
+# admin_net carries ONLY caddy + controld + prometheus (dashboard proxy and
+# metrics scrape) — tenant apps are never on it. Fixed subnet so Caddy's
+# :2019 metrics listener can allow only this range (the listener binds every
+# interface Caddy is on, and Caddy is also on app_net to proxy tenant apps).
+if ! docker network inspect admin_net >/dev/null 2>&1; then
+  docker network create --subnet "$ADMIN_NET_SUBNET" admin_net >/dev/null
+fi
 
 log "tailscale"
 if ! command -v tailscale >/dev/null; then

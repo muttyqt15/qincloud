@@ -26,6 +26,14 @@ own dependencies first; any new script should declare and check its deps
 blocks even teardown. Dummy-set the var or `docker rm -f` the containers
 directly when dismantling a stack whose env contract has moved on.
 
+## Compose interpolates `$` inside .env values
+
+A bcrypt hash (`$2a$14$…`) stored raw in `.env` gets mangled: compose treats
+`$2a` etc. as variable references and substitutes blanks — the consumer
+receives a corrupted value and nothing fails loud (compose only warns).
+Escape every `$` as `$$` when the value must contain dollars
+(`DASH_PASSWORD_HASH` is stored escaped). Class: any secret with `$` in it.
+
 ## docker.io pulls are flaky from this VPS
 
 TLS handshake timeouts against registry-1.docker.io come and go. Any

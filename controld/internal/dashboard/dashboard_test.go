@@ -91,8 +91,24 @@ func (f *fakeDeployer) Destroy(_ context.Context, app string) error {
 	return nil
 }
 
+// fakeRuntime serves canned stats/logs; err poisons both.
+type fakeRuntime struct {
+	stats deploy.ContainerStats
+	logs  string
+	err   error
+}
+
+func (f *fakeRuntime) Stats(context.Context, string) (deploy.ContainerStats, error) {
+	return f.stats, f.err
+}
+func (f *fakeRuntime) Logs(context.Context, string, int) (string, error) { return f.logs, f.err }
+
 func newTestServer(st *fakeStore, d *fakeDeployer) *http.ServeMux {
-	s := New(st, d)
+	return newTestServerRT(st, d, &fakeRuntime{})
+}
+
+func newTestServerRT(st *fakeStore, d *fakeDeployer, rt *fakeRuntime) *http.ServeMux {
+	s := New(st, d, rt)
 	s.fastFail = 20 * time.Millisecond // keep the slow-path handoff test fast
 	mux := http.NewServeMux()
 	s.Register(mux)
@@ -350,6 +366,61 @@ func TestAppDetailNeverEchoesEnvValues(t *testing.T) {
 	wantContains(t, rec, "tenant_db_net")
 	if strings.Contains(rec.Body.String(), "hunter2-do-not-render") {
 		t.Fatal("detail page rendered an env VALUE — secrets leak")
+	}
+}
+
+func TestStatsFragment(t *testing.T) {
+	deployed := deploy.App{AppSpec: testSpec, ContainerID: "abc", UpdatedAt: now}
+	never := deploy.App{AppSpec: deploy.AppSpec{Name: "fresh", Image: "img", ContainerPort: 80, Host: "f.x"}}
+	st := &fakeStore{apps: []deploy.App{deployed, never}}
+	rt := &fakeRuntime{stats: deploy.ContainerStats{CPUPercent: 3.14, MemBytes: 259 << 20, MemLimit: 512 << 20}}
+	mux := newTestServerRT(st, newFakeDeployer(), rt)
+
+	rec := get(t, mux, "/apps/whoami/stats")
+	wantContains(t, rec, "cpu 3.1%")
+	wantContains(t, rec, "259 MiB / 512 MiB")
+
+	rec = get(t, mux, "/apps/fresh/stats")
+	wantContains(t, rec, "not deployed yet")
+
+	rec = get(t, mux, "/apps/ghost/stats")
+	if rec.Code != htmxStopPolling {
+		t.Fatalf("ghost stats status = %d, want %d", rec.Code, htmxStopPolling)
+	}
+
+	rt.err = deploy.AppSpec{}.Validate()
+	rec = get(t, mux, "/apps/whoami/stats")
+	wantContains(t, rec, "stats unavailable")
+}
+
+// Log content is untrusted app output — it must render as text, never HTML.
+func TestLogsAreEscaped(t *testing.T) {
+	st := &fakeStore{apps: []deploy.App{{AppSpec: testSpec, ContainerID: "abc"}}}
+	rt := &fakeRuntime{logs: "hello <script>alert(1)</script>"}
+	rec := get(t, newTestServerRT(st, newFakeDeployer(), rt), "/apps/whoami/logs")
+
+	wantContains(t, rec, "&lt;script&gt;")
+	if strings.Contains(rec.Body.String(), "<script>alert") {
+		t.Fatal("log output rendered as raw HTML — XSS via app logs")
+	}
+}
+
+func TestMetricsExposition(t *testing.T) {
+	deployed := deploy.App{AppSpec: testSpec, ContainerID: "abc"}
+	never := deploy.App{AppSpec: deploy.AppSpec{Name: "fresh", Image: "img", ContainerPort: 80, Host: "f.x"}}
+	st := &fakeStore{apps: []deploy.App{deployed, never}}
+	rt := &fakeRuntime{stats: deploy.ContainerStats{CPUPercent: 2.5, MemBytes: 100, MemLimit: 200}}
+	rec := get(t, newTestServerRT(st, newFakeDeployer(), rt), "/metrics")
+
+	wantContains(t, rec, `qincloud_app_up{app="whoami"} 1`)
+	wantContains(t, rec, `qincloud_app_up{app="fresh"} 0`)
+	wantContains(t, rec, `qincloud_app_cpu_percent{app="whoami"} 2.5`)
+	wantContains(t, rec, `qincloud_app_memory_bytes{app="whoami"} 100`)
+	if strings.Contains(rec.Body.String(), `qincloud_app_memory_bytes{app="fresh"}`) {
+		t.Fatal("gauges emitted for an app with no running container")
+	}
+	if n := strings.Count(rec.Body.String(), "# TYPE qincloud_app_up"); n != 1 {
+		t.Fatalf("TYPE header for qincloud_app_up appears %d times, want 1 (repeats are a Prometheus parse error)", n)
 	}
 }
 

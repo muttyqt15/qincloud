@@ -138,11 +138,35 @@ templ AppPage(app deploy.App, deploys []deploy.DeployRecord, now time.Time) {
 			<dt>container</dt>
 			<dd class="mono">{ shortID(app.ContainerID) }</dd>
 		</dl>
+		<h3>resources</h3>
+		<div id="stats" hx-get={ "/apps/" + app.Name + "/stats" } hx-trigger="load, every 5s" hx-swap="innerHTML">
+			<p class="muted">measuring…</p>
+		</div>
+		<h3>logs <span class="muted">(last 100 lines, live)</span></h3>
+		<div id="logs" class="logbox" hx-get={ "/apps/" + app.Name + "/logs" } hx-trigger="load, every 5s" hx-swap="innerHTML">
+			<p class="muted">loading…</p>
+		</div>
 		<h3>deploy history</h3>
 		<div id="history" hx-get={ "/apps/" + app.Name + "/history" } hx-trigger="every 3s" hx-swap="innerHTML">
 			@HistoryTable(deploys, now)
 		</div>
 	}
+}
+
+templ StatsLine(text string) {
+	<p class="mono stats">{ text }</p>
+}
+
+templ LogsPane(text string) {
+	if text == "" {
+		<p class="muted">no log output.</p>
+	} else {
+		<pre class="logs">{ text }</pre>
+	}
+}
+
+templ MutedLine(text string) {
+	<p class="muted">{ text }</p>
 }
 
 templ HistoryTable(deploys []deploy.DeployRecord, now time.Time) {

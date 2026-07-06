@@ -130,3 +130,10 @@ button.htmx-request { opacity: 0.5; pointer-events: none; }
 .specs { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.2rem; }
 .specs dt { color: var(--muted); }
 .specs dd { margin: 0; }
+
+.stats { font-size: 0.9rem; }
+
+/* column-reverse pins the scroll position to the newest lines at the bottom,
+   surviving each poll swap without any JS */
+.logbox { display: flex; flex-direction: column-reverse; overflow-y: auto; max-height: 24rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.logs { margin: 0; padding: 0.6rem 0.8rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }

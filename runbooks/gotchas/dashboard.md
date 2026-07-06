@@ -4,14 +4,33 @@ Code: `controld/internal/dashboard/` — views in `views.templ`
 (regenerate with `go tool templ generate`; the generated `views_templ.go`
 is committed so the Docker build needs no templ toolchain).
 
-## Auth is reachability; CSRF is the HX-Request header
+## Two doors: tailnet raw, public behind edge basic auth
 
-No login by design — compose binds `:8600` to the Tailscale IP. But
-"tailnet-only" does not stop CSRF: a drive-by page in the operator's browser
-can form-POST to a tailnet IP. Every state-changing route therefore requires
-the `HX-Request` header (`requireHtmx`) — custom headers force a CORS
-preflight cross-origin, which the server never grants. Any new POST route
-must go through the same gate.
+`TS_IP:8600` is the unauthenticated tailnet path. https://dash.sparboard.com
+is the public path (deliberate operator decision 2026-07-06): Caddy
+`basic_auth` (user `admin`, bcrypt hash `DASH_PASSWORD_HASH` in `.env`,
+`$$`-escaped — see host.md) proxying over `admin_net`, a bridge carrying
+only caddy + controld + prometheus. The dashboard drives docker.sock — any
+new route mounted on its mux is automatically behind the edge auth on the
+public path, but NEVER weaken the site-block-wide `basic_auth` to
+per-path.
+
+## CSRF is the HX-Request header — under basic auth too
+
+A drive-by page in the operator's browser can form-POST to either door (the
+browser auto-attaches basic-auth credentials it has cached). Every
+state-changing route therefore requires the `HX-Request` header
+(`requireHtmx`) — custom headers force a CORS preflight cross-origin, which
+the server never grants. Any new POST route must go through the same gate.
+
+## Stats block ~1s; logs are capped
+
+`Runtime.Stats` double-samples via the daemon (that's where the CPU rate
+comes from) — poll fragments at ≥5s, and `/metrics` samples apps serially
+(fine for a handful; parallelize past that). Log responses are capped at
+256KB by `limitedWriter` so a flooding app can't balloon a request; content
+is app-controlled text and must always render templ-escaped (regression
+test: `TestLogsAreEscaped`).
 
 ## One status projection: the deploys table
 

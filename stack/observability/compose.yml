@@ -14,9 +14,9 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
       - --storage.tsdb.retention.size=4GB
-      # no --web.enable-lifecycle: prometheus sits on app_net (shared with tenant
-      # apps), which would let any tenant POST /-/quit or /-/reload. Reload config
-      # with: docker compose kill -s SIGHUP prometheus
+      # no --web.enable-lifecycle: even though prometheus is off app_net now,
+      # keep the lifecycle API disabled so nothing reachable can POST /-/quit
+      # or /-/reload. Reload config with: docker compose kill -s SIGHUP prometheus
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro
@@ -25,7 +25,12 @@ services:
       - "${TS_IP:?}:9090:9090" # Tailscale-only admin UI
     networks:
       - obs
-      - app_net # to scrape the Caddy admin endpoint (caddy:2019)
+      # admin_net reaches BOTH scrape targets outside obs: caddy:2019 (edge
+      # metrics) and qincloud-controld:8600 (per-app gauges). Deliberately NOT
+      # app_net — being off it is what lets caddy's :2019 block allow only the
+      # admin_net range and still be scrapable here (caddy resolves to its
+      # admin_net IP for us).
+      - admin_net
     mem_limit: 512m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
@@ -157,14 +162,31 @@ services:
     command:
       - --docker_only=true
       - --housekeeping_interval=30s # default 1s burns CPU on a 4-vCPU box
+      # Docker 29 uses the containerd image store; cadvisor's docker handler
+      # can't resolve rw layers there (classic layerdb is gone) and silently
+      # creates ZERO per-container series. Monitor through containerd in
+      # docker's namespace instead, and point the docker endpoint at a dead
+      # socket so the (broken) docker factory stands down. NOTE: series carry
+      # the container ID in `name`, not the docker name — per-APP metrics
+      # with app="<name>" labels come from controld's /metrics instead.
+      - --docker=unix:///nonexistent.sock
+      - --containerd=/run/containerd/containerd.sock
+      - --containerd-namespace=moby
     devices:
       - /dev/kmsg
+    # reading /dev/kmsg for OOM-event detection needs CAP_SYSLOG; without it
+    # cadvisor logs "Could not configure a source for OOM detection" and
+    # container_oom_events_total is permanently 0 (a per-app OOM would go
+    # unseen — the exact event a memory-capped PaaS most wants).
+    cap_add:
+      - SYSLOG
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
       - /dev/disk:/dev/disk:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
     networks:
       - obs
     mem_limit: 256m
@@ -217,10 +239,10 @@ secrets:
 
 networks:
   obs: {} # project-internal scrape/query plane; nothing outside this stack needs it
-  app_net:
-    external: true
   data_net:
     external: true
+  admin_net:
+    external: true # created by bootstrap.sh
 
 volumes:
   prometheus_data:

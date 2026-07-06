@@ -37,6 +37,10 @@ services:
       # unreachable from tenant workloads: invariant #3 inside the docker
       # network boundary, not just at the TS_IP-bound host port.
       - data_net # reach qincloud-postgres
+      # admin_net: caddy proxies dash.sparboard.com here (basic_auth at the
+      # edge) and prometheus scrapes /metrics. Deliberately NOT app_net —
+      # tenant workloads must never reach a docker.sock-holding service.
+      - admin_net
     mem_limit: 128m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8600/healthz"]
@@ -47,6 +51,8 @@ services:
 networks:
   data_net:
     external: true
+  admin_net:
+    external: true # created by bootstrap.sh
 
 volumes:
   caddy_admin:
