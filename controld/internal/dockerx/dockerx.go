@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -106,6 +107,46 @@ func (c *Client) Pull(ctx context.Context, imageRef string) error {
 		return fmt.Errorf("pull %s: %w", imageRef, err)
 	}
 	return nil
+}
+
+// ResolveImage pulls an image and reports what it declares, so the operator
+// does not have to hand-supply a container port: the exposed ports come from
+// the image's own EXPOSE metadata. Pulling (rather than a lighter registry
+// query) is deliberate — it both verifies the reference is real and pullable
+// AND warms the cache so the subsequent deploy's pull is a no-op.
+func (c *Client) ResolveImage(ctx context.Context, ref string) (deploy.ImageInfo, error) {
+	if err := c.Pull(ctx, ref); err != nil {
+		return deploy.ImageInfo{}, err
+	}
+	insp, err := c.api.ImageInspect(ctx, ref)
+	if err != nil {
+		return deploy.ImageInfo{}, fmt.Errorf("inspect %s: %w", ref, err)
+	}
+	info := deploy.ImageInfo{Ref: ref, SizeBytes: insp.Size, ExposedPorts: []int{}}
+	if insp.Config != nil {
+		for p := range insp.Config.ExposedPorts {
+			if port, ok := tcpPort(fmt.Sprint(p)); ok {
+				info.ExposedPorts = append(info.ExposedPorts, port)
+			}
+		}
+	}
+	sort.Ints(info.ExposedPorts)
+	return info, nil
+}
+
+// tcpPort parses a Docker exposed-port key ("80/tcp", or bare "80") into its
+// TCP port number. UDP entries and anything out of range return ok=false, so
+// the dashboard only ever offers a real TCP port to reverse-proxy to.
+func tcpPort(spec string) (int, bool) {
+	num, proto, hasProto := strings.Cut(spec, "/")
+	if hasProto && proto != "tcp" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil || n < 1 || n > 65535 {
+		return 0, false
+	}
+	return n, true
 }
 
 // StartApp creates and starts container qc-<app>-<deployID> on app_net and

@@ -137,3 +137,51 @@ button.htmx-request { opacity: 0.5; pointer-events: none; }
    surviving each poll swap without any JS */
 .logbox { display: flex; flex-direction: column-reverse; overflow-y: auto; max-height: 24rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .logs { margin: 0; padding: 0.6rem 0.8rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* --- toolbar + buttons ------------------------------------------------------ */
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.4rem; }
+.toolbar h2 { margin: 0; }
+
+button.primary { background: var(--accent); border-color: var(--accent); color: #0d1017; font-weight: 600; }
+button.primary:hover { color: #0d1017; filter: brightness(1.08); }
+button.primary:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+button.ghost { background: transparent; }
+button.icon { border: none; background: transparent; color: var(--muted); font-size: 1.2rem; line-height: 1; padding: 0.1rem 0.4rem; }
+button.icon:hover { color: var(--text); }
+button:disabled { cursor: not-allowed; }
+
+/* --- deploy modal ----------------------------------------------------------- */
+.modal { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); color: var(--text); padding: 0; width: min(30rem, calc(100vw - 2rem)); }
+.modal::backdrop { background: rgba(0, 0, 0, 0.55); }
+
+.deploy-form { display: flex; flex-direction: column; gap: 0.75rem; padding: 1.1rem 1.2rem 1.2rem; }
+.deploy-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--muted); }
+.deploy-form label input, .deploy-form label textarea, .deploy-form label select { flex: 0 0 auto; width: 100%; color: var(--text); }
+.deploy-form .check { flex-direction: row; align-items: center; gap: 0.45rem; }
+
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-head h3 { margin: 0; font-size: 1rem; text-transform: none; letter-spacing: 0; color: var(--text); }
+.modal-foot { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.25rem; }
+
+select { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 0.45rem 0.6rem; font: inherit; }
+
+.advanced { border-top: 1px solid var(--border); padding-top: 0.55rem; }
+.advanced summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
+.advanced > label, .advanced > .check { margin-top: 0.6rem; }
+
+/* --- image resolve status --------------------------------------------------- */
+.image-status { display: flex; align-items: flex-start; gap: 0.5rem; }
+.image-status > #image-result { flex: 1 1 auto; }
+#image-result p { margin: 0; font-size: 0.8rem; }
+#image-result input, #image-result select { display: block; width: 100%; margin-top: 0.4rem; }
+.hint { color: var(--muted); }
+#image-result p.ok { color: var(--ok); }
+#image-result p.warn { color: var(--warn); }
+#image-result p.error { color: var(--err); overflow-wrap: anywhere; }
+
+/* --- spinner / htmx loading indicator --------------------------------------- */
+.spin { display: inline-block; width: 0.85em; height: 0.85em; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; vertical-align: -0.1em; }
+.htmx-indicator { opacity: 0; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; animation: qc-spin 0.6s linear infinite; }
+#image-spin { flex: 0 0 auto; margin-top: 0.15rem; color: var(--accent); }
+@keyframes qc-spin { to { transform: rotate(360deg); } }

@@ -44,6 +44,11 @@ const (
 	// rather than polling "starting…" forever.
 	staleAfter = 10 * time.Minute
 
+	// imageResolveTimeout bounds the pull-and-inspect behind the deploy form's
+	// image check. A cold pull of a large image can take a while; the field
+	// shows a spinner until this elapses.
+	imageResolveTimeout = 3 * time.Minute
+
 	historyLimit = 20
 )
 
@@ -57,11 +62,16 @@ type Store interface {
 }
 
 // Runtime is the live-container observability surface — implemented by
-// *dockerx.Client. Read-only; the dashboard renders what it returns but
-// never mutates through it.
+// *dockerx.Client. Read-only from the deploy state machine's view: it inspects
+// but never mutates app state (ResolveImage does pull an image, which only
+// warms the local cache).
 type Runtime interface {
 	Stats(ctx context.Context, containerID string) (deploy.ContainerStats, error)
 	Logs(ctx context.Context, containerID string, tail int) (string, error)
+	// ResolveImage verifies an image is real/pullable and reports its exposed
+	// ports, so the deploy form can auto-detect the container port instead of
+	// making the operator guess.
+	ResolveImage(ctx context.Context, ref string) (deploy.ImageInfo, error)
 }
 
 // Deployer is the action surface — implemented by *deploy.Deployer.
@@ -100,6 +110,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /apps/{name}/stats", s.appStats)
 	mux.HandleFunc("GET /apps/{name}/logs", s.appLogs)
 	mux.HandleFunc("GET /metrics", s.metrics)
+	mux.HandleFunc("POST /images/resolve", requireHtmx(s.resolveImage))
 	mux.HandleFunc("POST /deploy", requireHtmx(s.deploy))
 	mux.HandleFunc("POST /apps/{name}/redeploy", requireHtmx(s.redeploy))
 	mux.HandleFunc("POST /apps/{name}/destroy", requireHtmx(s.destroy))
@@ -199,17 +210,72 @@ func (s *Server) appHistory(w http.ResponseWriter, r *http.Request) {
 	render(w, r, HistoryTable(deploys, time.Now()))
 }
 
+// --- POST: image resolution (the deploy form's auto-detect) -------------------
+
+// resolveImage verifies the typed image and reports its exposed ports so the
+// operator does not pick a container port by hand. It renders the deploy
+// form's #image-result fragment: the port field it emits is what the operator
+// then submits, so a good deploy never reaches the daemon with a guessed port.
+func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
+	ref := strings.TrimSpace(r.FormValue("image"))
+	if ref == "" {
+		render(w, r, ImageUnchecked())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), imageResolveTimeout)
+	defer cancel()
+	info, err := s.runtime.ResolveImage(ctx, ref)
+	if err != nil {
+		render(w, r, ImageResolveError(ref, err.Error()))
+		return
+	}
+	render(w, r, ImageResolved(info))
+}
+
 // --- POST: actions ------------------------------------------------------------
 
 func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 	spec, err := specFromForm(r)
 	if err != nil {
-		flashError(w, r, err)
+		flashError(w, r, err) // into the modal's #deploy-flash; modal stays open
 		return
 	}
-	s.runAsync(w, r, "deploy of "+spec.Name, func(ctx context.Context) error {
+	s.runDeploy(w, r, "deploy of "+spec.Name, func(ctx context.Context) error {
 		return s.deployer.Deploy(ctx, spec)
 	})
+}
+
+// runDeploy is runAsync for the modal: on success it fires the HX-Trigger the
+// page listens on to close the dialog, and OOB-swaps the confirmation onto the
+// main #flash (the modal — and its #deploy-flash — is gone by then); on error
+// it renders into the modal's #deploy-flash so the operator can fix and retry
+// without losing what they typed.
+func (s *Server) runDeploy(w http.ResponseWriter, r *http.Request, what string, run func(context.Context) error) {
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), deployBudget)
+		defer cancel()
+		err := run(ctx)
+		if err != nil {
+			log.Printf("dashboard: %s failed: %v", what, err)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			flashError(w, r, err)
+			return
+		}
+		s.deployStarted(w, r, what+" finished")
+	case <-time.After(s.fastFail):
+		s.deployStarted(w, r, what+" started — status appears in the list")
+	}
+}
+
+func (s *Server) deployStarted(w http.ResponseWriter, r *http.Request, msg string) {
+	w.Header().Set("HX-Trigger", "deploy-started") // app.js closes + resets the modal
+	render(w, r, DeployStarted(msg))               // OOB-swaps the flash onto the page
 }
 
 func (s *Server) redeploy(w http.ResponseWriter, r *http.Request) {
@@ -388,4 +454,19 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// humanSize renders an image size for the resolve line — rough is fine, it's
+// just to give the operator a sense of the pull.
+func humanSize(b int64) string {
+	const mb = 1 << 20
+	const gb = 1 << 30
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GB", float64(b)/gb)
+	case b >= mb:
+		return fmt.Sprintf("%d MB", b/mb)
+	default:
+		return fmt.Sprintf("%d KB", b/1024)
+	}
 }

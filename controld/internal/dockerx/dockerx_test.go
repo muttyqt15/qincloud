@@ -179,3 +179,26 @@ func TestCalcStats(t *testing.T) {
 		}
 	})
 }
+
+func TestTCPPort(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		{"80/tcp", 80, true},
+		{"3000/tcp", 3000, true},
+		{"80", 80, true},        // bare number, no proto
+		{"53/udp", 0, false},    // udp is not routable by our reverse proxy
+		{"0/tcp", 0, false},     // out of range
+		{"70000/tcp", 0, false}, // out of range
+		{"http/tcp", 0, false},  // non-numeric
+		{"", 0, false},          // empty
+	}
+	for _, c := range cases {
+		got, ok := tcpPort(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("tcpPort(%q) = (%d, %v), want (%d, %v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}

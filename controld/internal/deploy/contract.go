@@ -98,6 +98,17 @@ type ContainerStats struct {
 	MemLimit   int64   // the container's memory cap
 }
 
+// ImageInfo is what pulling+inspecting an image tells the dashboard so the
+// operator does not have to hand-supply a port: the ports the image declares
+// it listens on (EXPOSE). Same rationale as ContainerStats for living here
+// and off the Docker interface — the deploy state machine is handed a
+// concrete port and never inspects.
+type ImageInfo struct {
+	Ref          string // the resolved reference (as requested)
+	ExposedPorts []int  // TCP ports the image EXPOSEs, ascending; empty if none declared
+	SizeBytes    int64  // on-disk size of the pulled image
+}
+
 // Router programs the edge (Caddy admin API over its unix socket).
 type Router interface {
 	// UpsertRoute makes requests for host reverse-proxy to dial

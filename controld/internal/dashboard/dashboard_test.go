@@ -91,17 +91,23 @@ func (f *fakeDeployer) Destroy(_ context.Context, app string) error {
 	return nil
 }
 
-// fakeRuntime serves canned stats/logs; err poisons both.
+// fakeRuntime serves canned stats/logs; err poisons both. resolveInfo/
+// resolveErr drive the image-resolve endpoint independently.
 type fakeRuntime struct {
-	stats deploy.ContainerStats
-	logs  string
-	err   error
+	stats       deploy.ContainerStats
+	logs        string
+	err         error
+	resolveInfo deploy.ImageInfo
+	resolveErr  error
 }
 
 func (f *fakeRuntime) Stats(context.Context, string) (deploy.ContainerStats, error) {
 	return f.stats, f.err
 }
 func (f *fakeRuntime) Logs(context.Context, string, int) (string, error) { return f.logs, f.err }
+func (f *fakeRuntime) ResolveImage(context.Context, string) (deploy.ImageInfo, error) {
+	return f.resolveInfo, f.resolveErr
+}
 
 func newTestServer(st *fakeStore, d *fakeDeployer) *http.ServeMux {
 	return newTestServerRT(st, d, &fakeRuntime{})
@@ -503,4 +509,61 @@ func TestTook(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveImageSinglePort(t *testing.T) {
+	rt := &fakeRuntime{resolveInfo: deploy.ImageInfo{Ref: "nginx", ExposedPorts: []int{80}, SizeBytes: 50 << 20}}
+	rec := post(t, newTestServerRT(&fakeStore{}, newFakeDeployer(), rt), "/images/resolve",
+		url.Values{"image": {"nginx"}}, true)
+	wantContains(t, rec, "listens on port 80")
+	wantContains(t, rec, `name="port"`)
+	wantContains(t, rec, `value="80"`)
+}
+
+func TestResolveImageMultiPortOffersPicker(t *testing.T) {
+	rt := &fakeRuntime{resolveInfo: deploy.ImageInfo{ExposedPorts: []int{80, 3000}}}
+	rec := post(t, newTestServerRT(&fakeStore{}, newFakeDeployer(), rt), "/images/resolve",
+		url.Values{"image": {"x"}}, true)
+	wantContains(t, rec, "<select")
+	wantContains(t, rec, ">3000<")
+}
+
+func TestResolveImageNoPortAsksForOne(t *testing.T) {
+	rt := &fakeRuntime{resolveInfo: deploy.ImageInfo{ExposedPorts: []int{}}}
+	rec := post(t, newTestServerRT(&fakeStore{}, newFakeDeployer(), rt), "/images/resolve",
+		url.Values{"image": {"x"}}, true)
+	wantContains(t, rec, "declares no port")
+	wantContains(t, rec, `name="port"`)
+}
+
+func TestResolveImageErrorEmitsNoPortField(t *testing.T) {
+	rt := &fakeRuntime{resolveErr: deploy.AppSpec{}.Validate()}
+	rec := post(t, newTestServerRT(&fakeStore{}, newFakeDeployer(), rt), "/images/resolve",
+		url.Values{"image": {"ghcr.io/no/such:v9"}}, true)
+	wantContains(t, rec, "couldn't pull")
+	if strings.Contains(rec.Body.String(), `name="port"`) {
+		t.Fatal("a failed resolve must not emit a port field (submit stays disabled)")
+	}
+}
+
+func TestResolveImageEmptyRefIsResting(t *testing.T) {
+	rec := post(t, newTestServer(&fakeStore{}, newFakeDeployer()), "/images/resolve",
+		url.Values{"image": {"  "}}, true)
+	wantContains(t, rec, "detected from the image")
+}
+
+// A successful deploy must fire the trigger app.js listens on to close the
+// modal, and OOB-swap the confirmation onto the page's #flash.
+func TestDeploySuccessTriggersModalClose(t *testing.T) {
+	d := newFakeDeployer()
+	mux := newTestServer(&fakeStore{}, d)
+	form := url.Values{"name": {"whoami"}, "image": {testSpec.Image}, "port": {"80"}, "host": {testSpec.Host}}
+	rec := post(t, mux, "/deploy", form, true)
+
+	if got := rec.Header().Get("HX-Trigger"); got != "deploy-started" {
+		t.Fatalf("HX-Trigger = %q, want deploy-started", got)
+	}
+	wantContains(t, rec, `id="flash"`)
+	wantContains(t, rec, "hx-swap-oob")
+	<-d.deployed
 }

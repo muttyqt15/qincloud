@@ -19,6 +19,7 @@ templ layout(title string) {
 			<title>{ title }</title>
 			<link rel="stylesheet" href="/static/styles.css"/>
 			<script src="/static/htmx.min.js"></script>
+			<script src="/static/app.js" defer></script>
 		</head>
 		<body>
 			<header>
@@ -34,41 +35,136 @@ templ layout(title string) {
 
 templ IndexPage(apps []deploy.App, latest map[string]deploy.DeployRecord, now time.Time) {
 	@layout("qincloud — apps") {
-		<section>
-			<h2>deploy</h2>
-			@DeployForm()
-			<div id="flash"></div>
-		</section>
-		<section>
+		<section class="toolbar">
 			<h2>apps</h2>
-			<!--
-				The poll condition pauses list refresh while ANY htmx request is in
-				flight: an unconditional innerHTML swap would replace a destroy/
-				redeploy button mid-request, erasing its .htmx-request guard and
-				re-arming it for a double click.
-			-->
-			<div
-				id="apps"
-				hx-get="/apps"
-				hx-trigger="every 3s [document.querySelectorAll('.htmx-request').length === 0]"
-				hx-swap="innerHTML"
-			>
-				@AppList(apps, latest, now)
-			</div>
+			<button class="primary" onclick="qcDeployOpen()">+ Deploy app</button>
 		</section>
+		<div id="flash"></div>
+		<!--
+			The poll condition pauses list refresh while ANY htmx request is in
+			flight: an unconditional innerHTML swap would replace a destroy/
+			redeploy button mid-request, erasing its .htmx-request guard and
+			re-arming it for a double click.
+		-->
+		<div
+			id="apps"
+			hx-get="/apps"
+			hx-trigger="every 3s [document.querySelectorAll('.htmx-request').length === 0]"
+			hx-swap="innerHTML"
+		>
+			@AppList(apps, latest, now)
+		</div>
+		@DeployDialog()
 	}
 }
 
-templ DeployForm() {
-	<form hx-post="/deploy" hx-target="#flash" hx-swap="innerHTML" autocomplete="off">
-		<input name="name" placeholder="app name" required/>
-		<input name="image" placeholder="image, e.g. traefik/whoami:v1.10" required/>
-		<input name="port" placeholder="container port" inputmode="numeric" required/>
-		<input name="host" placeholder="host, e.g. app.sparboard.com" required/>
-		<textarea name="env" placeholder="env, one KEY=VALUE per line (optional)" rows="2"></textarea>
-		<label class="check"><input type="checkbox" name="db"/> needs database (joins tenant_db_net)</label>
-		<button type="submit">deploy</button>
-	</form>
+// DeployDialog is the deploy form in a native <dialog>. The port is not asked
+// for: typing an image resolves it (POST /images/resolve) and the returned
+// #image-result fragment carries the port field. The submit button starts
+// disabled and app.js enables it once a port is known.
+templ DeployDialog() {
+	<dialog id="deploy-modal" class="modal">
+		<form
+			class="deploy-form"
+			hx-post="/deploy"
+			hx-target="#deploy-flash"
+			hx-swap="innerHTML"
+			hx-disabled-elt="find button[type='submit']"
+			autocomplete="off"
+		>
+			<div class="modal-head">
+				<h3>Deploy an app</h3>
+				<button type="button" class="icon" onclick="qcDeployClose()" aria-label="close">×</button>
+			</div>
+			<label>
+				App name
+				<input name="name" placeholder="e.g. blog" pattern="[a-z0-9][a-z0-9-]{0,31}" required/>
+			</label>
+			<label>
+				Image
+				<input
+					name="image"
+					placeholder="e.g. ghcr.io/you/app:v1"
+					hx-post="/images/resolve"
+					hx-trigger="change"
+					hx-target="#image-result"
+					hx-swap="innerHTML"
+					hx-indicator="#image-spin"
+					required
+				/>
+			</label>
+			<div class="image-status">
+				<span id="image-spin" class="spin htmx-indicator" aria-hidden="true"></span>
+				<div id="image-result">
+					@ImageUnchecked()
+				</div>
+			</div>
+			<label>
+				Host
+				<input name="host" placeholder="e.g. blog.sparboard.com" required/>
+			</label>
+			<details class="advanced">
+				<summary>Advanced</summary>
+				<label class="check">
+					<input type="checkbox" name="db"/>
+					needs a database (joins tenant_db_net)
+				</label>
+				<label>
+					Environment <span class="muted">(one KEY=VALUE per line)</span>
+					<textarea name="env" rows="3" placeholder="DATABASE_URL=postgresql://…"></textarea>
+				</label>
+			</details>
+			<div id="deploy-flash"></div>
+			<div class="modal-foot">
+				<button type="button" class="ghost" onclick="qcDeployClose()">Cancel</button>
+				<button type="submit" class="primary" disabled>
+					<span class="btn-label">Deploy</span>
+					<span class="spin htmx-indicator" aria-hidden="true"></span>
+				</button>
+			</div>
+		</form>
+	</dialog>
+}
+
+// ImageUnchecked is the resting state of #image-result before an image is typed.
+templ ImageUnchecked() {
+	<p class="hint">the container port is detected from the image automatically</p>
+}
+
+// ImageResolved renders the successful check plus the port field the operator
+// submits: one exposed port becomes a hidden field, several become a picker,
+// none asks for the port explicitly (some images declare no EXPOSE).
+templ ImageResolved(info deploy.ImageInfo) {
+	switch len(info.ExposedPorts) {
+		case 1:
+			<p class="ok">✓ image OK · listens on port { strconv.Itoa(info.ExposedPorts[0]) } · { humanSize(info.SizeBytes) }</p>
+			<input type="hidden" name="port" value={ strconv.Itoa(info.ExposedPorts[0]) }/>
+		case 0:
+			<p class="warn">✓ image OK, but it declares no port — enter the container port</p>
+			<input name="port" inputmode="numeric" placeholder="container port" required/>
+		default:
+			<p class="ok">✓ image OK · exposes several ports — pick one</p>
+			<select name="port" required>
+				for _, p := range info.ExposedPorts {
+					<option value={ strconv.Itoa(p) }>{ strconv.Itoa(p) }</option>
+				}
+			</select>
+	}
+}
+
+// ImageResolveError renders a failed check: no port field is emitted, so the
+// submit stays disabled until the operator fixes the reference.
+templ ImageResolveError(ref, msg string) {
+	<p class="error">✗ couldn't pull <span class="mono">{ ref }</span> — { msg }</p>
+}
+
+// DeployStarted is the success response: the OOB swap lands the confirmation on
+// the page's #flash (the modal is closing), and the handler's HX-Trigger tells
+// app.js to close and reset the dialog.
+templ DeployStarted(msg string) {
+	<div id="flash" hx-swap-oob="innerHTML">
+		<p class="flash ok">{ msg }</p>
+	</div>
 }
 
 templ AppList(apps []deploy.App, latest map[string]deploy.DeployRecord, now time.Time) {
