@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -53,6 +54,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: controld <serve | deploy | list | destroy>
   serve
   deploy  -app <name> -image <ref> -port <containerPort> -host <hostname>
+          [-db] [-env KEY=VALUE ...]
   list
   destroy -app <name>`)
 	os.Exit(2)
@@ -119,6 +121,18 @@ func deployCmd(args []string) error {
 	fs.StringVar(&spec.Image, "image", "", "image ref")
 	fs.IntVar(&spec.ContainerPort, "port", 0, "port the app listens on in the container")
 	fs.StringVar(&spec.Host, "host", "", "hostname to route to this app")
+	fs.BoolVar(&spec.UseDB, "db", false, "attach tenant_db_net (shared Postgres reachable)")
+	fs.Func("env", "KEY=VALUE container env (repeatable)", func(v string) error {
+		k, val, ok := strings.Cut(v, "=")
+		if !ok || k == "" {
+			return fmt.Errorf("want KEY=VALUE, got %q", v)
+		}
+		if spec.Env == nil {
+			spec.Env = map[string]string{}
+		}
+		spec.Env[k] = val
+		return nil
+	})
 	_ = fs.Parse(args) // ExitOnError: Parse never returns an error
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

@@ -88,6 +88,22 @@ input {
 
 input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 
+textarea {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  flex: 1 1 100%;
+  resize: vertical;
+}
+
+textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+.check { display: flex; align-items: center; gap: 0.4rem; color: var(--muted); flex: 1 1 100%; }
+.check input { flex: 0 0 auto; }
+
 button {
   background: var(--panel);
   border: 1px solid var(--border);

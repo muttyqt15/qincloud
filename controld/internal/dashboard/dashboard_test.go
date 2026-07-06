@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -234,7 +235,7 @@ func TestSlowDeployHandsOffToPolling(t *testing.T) {
 	close(d.block)
 	select {
 	case spec := <-d.deployed:
-		if spec != testSpec {
+		if !reflect.DeepEqual(spec, testSpec) {
 			t.Fatalf("deployed spec = %+v, want %+v", spec, testSpec)
 		}
 	case <-time.After(2 * time.Second):
@@ -298,6 +299,57 @@ func TestDestroyReachesDeployer(t *testing.T) {
 		}
 	default:
 		t.Fatal("destroy never reached the deployer")
+	}
+}
+
+func TestEnvFromLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		want    map[string]string
+		wantErr bool
+	}{
+		{"empty", "", map[string]string{}, false},
+		{"blank lines ignored", "\n  \nA=1\n\n", map[string]string{"A": "1"}, false},
+		{"value keeps equals", "DSN=postgres://u:p=x@h/db", map[string]string{"DSN": "postgres://u:p=x@h/db"}, false},
+		{"crlf tolerated", "A=1\r\nB=2", map[string]string{"A": "1", "B": "2"}, false},
+		{"no equals is an error", "JUSTAKEY", nil, true},
+		{"empty key is an error", "=value", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := envFromLines(tt.text)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Fatalf("got %v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// Env VALUES are secrets: the detail page shows keys only, never values.
+func TestAppDetailNeverEchoesEnvValues(t *testing.T) {
+	app := deploy.App{AppSpec: testSpec, UpdatedAt: now}
+	app.Env = map[string]string{"APP_SECRET": "hunter2-do-not-render"}
+	app.UseDB = true
+	st := &fakeStore{apps: []deploy.App{app}}
+
+	rec := get(t, newTestServer(st, newFakeDeployer()), "/apps/whoami")
+
+	wantContains(t, rec, "APP_SECRET")
+	wantContains(t, rec, "tenant_db_net")
+	if strings.Contains(rec.Body.String(), "hunter2-do-not-render") {
+		t.Fatal("detail page rendered an env VALUE — secrets leak")
 	}
 }
 

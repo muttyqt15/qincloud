@@ -65,6 +65,8 @@ templ DeployForm() {
 		<input name="image" placeholder="image, e.g. traefik/whoami:v1.10" required/>
 		<input name="port" placeholder="container port" inputmode="numeric" required/>
 		<input name="host" placeholder="host, e.g. app.sparboard.com" required/>
+		<textarea name="env" placeholder="env, one KEY=VALUE per line (optional)" rows="2"></textarea>
+		<label class="check"><input type="checkbox" name="db"/> needs database (joins tenant_db_net)</label>
 		<button type="submit">deploy</button>
 	</form>
 }
@@ -123,6 +125,16 @@ templ AppPage(app deploy.App, deploys []deploy.DeployRecord, now time.Time) {
 			<dd><a href={ templ.URL("https://" + app.Host) } target="_blank" rel="noopener">{ app.Host }</a></dd>
 			<dt>port</dt>
 			<dd>{ strconv.Itoa(app.ContainerPort) }</dd>
+			<dt>env</dt>
+			<dd class="mono">{ envKeys(app.Env) }</dd>
+			<dt>database</dt>
+			<dd>
+				if app.UseDB {
+					yes — on tenant_db_net
+				} else {
+					no
+				}
+			</dd>
 			<dt>container</dt>
 			<dd class="mono">{ shortID(app.ContainerID) }</dd>
 		</dl>

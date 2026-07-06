@@ -23,6 +23,10 @@ services:
       - ./initdb:/docker-entrypoint-initdb.d:ro
     networks:
       - data_net
+      # tenant apps deployed with -db reach postgres here; per-role passwords
+      # do the authorization, this network does the reachability. Redis is
+      # deliberately NOT on it.
+      - tenant_db_net
     # default 64mb /dev/shm stalls parallel workers and big sorts
     shm_size: 128mb
     mem_limit: 1g
@@ -73,3 +77,5 @@ volumes:
 networks:
   data_net:
     external: true
+  tenant_db_net:
+    external: true # created by bootstrap.sh

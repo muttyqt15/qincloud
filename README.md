@@ -116,7 +116,7 @@ Order matters; each step fails loud if a dependency is missing.
 | M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | ✅ pager drill 2026-07-06: real outage → Discord page → resolved |
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
 | M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history + deploy/redeploy/destroy on :8600 (tailnet) |
-| M6  | Onboard first real app                                       | —      |
+| M6  | Onboard first real app                                       | ✅ Umami analytics live at analytics.sparboard.com ([runbook](runbooks/apps/umami.md)); AppSpec env + tenant_db_net |
 | M7  | SLOs + error-budget burn alerts                              | —      |
 | M8  | DR rehearsal: restore drill, measured RTO/RPO                | ✅ full box rebuild 2026-07-06: wipe → serving in ≈12 min ([drill](runbooks/drills/2026-07-06-m8-box-rebuild-drill.md)) |
 | M9  | Failure drills + blameless postmortems                       | —      |

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -253,12 +254,53 @@ func specFromForm(r *http.Request) (deploy.AppSpec, error) {
 	if err != nil {
 		return deploy.AppSpec{}, fmt.Errorf("port must be a number")
 	}
+	env, err := envFromLines(r.FormValue("env"))
+	if err != nil {
+		return deploy.AppSpec{}, err
+	}
 	return deploy.AppSpec{
 		Name:          strings.TrimSpace(r.FormValue("name")),
 		Image:         strings.TrimSpace(r.FormValue("image")),
 		ContainerPort: port,
 		Host:          strings.TrimSpace(r.FormValue("host")),
+		Env:           env,
+		UseDB:         r.FormValue("db") == "on",
 	}, nil
+}
+
+// envFromLines parses the form's env textarea: one KEY=VALUE per line, blank
+// lines ignored. Key validity is AppSpec.Validate's job, shape is ours.
+func envFromLines(text string) (map[string]string, error) {
+	env := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("env line %q: want KEY=VALUE", line)
+		}
+		env[k] = v
+	}
+	if len(env) == 0 {
+		return nil, nil // no env = nil map, same as a CLI deploy without -env
+	}
+	return env, nil
+}
+
+// envKeys renders which env vars an app carries WITHOUT their values — env
+// values are secrets and the detail page must never echo them.
+func envKeys(env map[string]string) string {
+	if len(env) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return strings.Join(keys, ", ")
 }
 
 // --- rendering helpers ---------------------------------------------------------

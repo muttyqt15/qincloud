@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -62,15 +63,21 @@ const uniqueViolation = "23505"
 // into a "host already routed by app X" error; Deploy upserts before any
 // container work, so the conflict fails the deploy up front.
 func (s *Store) UpsertApp(ctx context.Context, spec deploy.AppSpec) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO apps (name, image, container_port, host)
-		VALUES ($1, $2, $3, $4)
+	env, err := json.Marshal(orEmpty(spec.Env))
+	if err != nil {
+		return fmt.Errorf("upsert app %s: encode env: %w", spec.Name, err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO apps (name, image, container_port, host, env, use_db)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (name) DO UPDATE SET
 			image          = EXCLUDED.image,
 			container_port = EXCLUDED.container_port,
 			host           = EXCLUDED.host,
+			env            = EXCLUDED.env,
+			use_db         = EXCLUDED.use_db,
 			updated_at     = now()`,
-		spec.Name, spec.Image, spec.ContainerPort, spec.Host)
+		spec.Name, spec.Image, spec.ContainerPort, spec.Host, env, spec.UseDB)
 	if err == nil {
 		return nil
 	}
@@ -147,12 +154,28 @@ func (s *Store) SetLiveContainer(ctx context.Context, app, containerID string) e
 
 // appColumns is the single source of column order for scanApp — GetApp and
 // ListApps must never drift apart on what an App row looks like.
-const appColumns = "name, image, container_port, host, container_id, updated_at"
+const appColumns = "name, image, container_port, host, env, use_db, container_id, updated_at"
 
 func scanApp(row pgx.Row) (deploy.App, error) {
 	var a deploy.App
-	err := row.Scan(&a.Name, &a.Image, &a.ContainerPort, &a.Host, &a.ContainerID, &a.UpdatedAt)
-	return a, err
+	var env []byte
+	err := row.Scan(&a.Name, &a.Image, &a.ContainerPort, &a.Host, &env, &a.UseDB, &a.ContainerID, &a.UpdatedAt)
+	if err != nil {
+		return a, err
+	}
+	if err := json.Unmarshal(env, &a.Env); err != nil {
+		return a, fmt.Errorf("decode env for %s: %w", a.Name, err)
+	}
+	return a, nil
+}
+
+// orEmpty keeps the env column NOT NULL '{}' honest: a nil map marshals to
+// JSON null, which is not an object.
+func orEmpty(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
 }
 
 func (s *Store) GetApp(ctx context.Context, app string) (*deploy.App, error) {

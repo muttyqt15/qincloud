@@ -7,9 +7,16 @@ CREATE TABLE IF NOT EXISTS apps (
     image          text NOT NULL,
     container_port int  NOT NULL CHECK (container_port BETWEEN 1 AND 65535),
     host           text NOT NULL,
+    env            jsonb NOT NULL DEFAULT '{}', -- container environment (values may be secrets)
+    use_db         boolean NOT NULL DEFAULT false, -- attach tenant_db_net (shared Postgres)
     container_id   text NOT NULL DEFAULT '', -- '' = never successfully deployed
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
+
+-- M6 columns on boxes whose apps table predates them. ADD COLUMN IF NOT
+-- EXISTS keeps this file re-applicable, same as everything else in Init.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS env jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS use_db boolean NOT NULL DEFAULT false;
 
 -- One host routes to exactly one app. Two apps claiming the same host is an
 -- invalid state — first matching route wins at the edge and the other app

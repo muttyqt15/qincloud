@@ -586,6 +586,9 @@ func TestValidateRejectsBrokenSpecs(t *testing.T) {
 		{"port zero", func(s *AppSpec) { s.ContainerPort = 0 }},
 		{"port too big", func(s *AppSpec) { s.ContainerPort = 70000 }},
 		{"empty host", func(s *AppSpec) { s.Host = "" }},
+		{"env key with dash", func(s *AppSpec) { s.Env = map[string]string{"BAD-KEY": "x"} }},
+		{"env key starting with digit", func(s *AppSpec) { s.Env = map[string]string{"1KEY": "x"} }},
+		{"empty env key", func(s *AppSpec) { s.Env = map[string]string{"": "x"} }},
 	}
 	for _, tc := range cases {
 		s := spec()
@@ -596,5 +599,11 @@ func TestValidateRejectsBrokenSpecs(t *testing.T) {
 	}
 	if err := spec().Validate(); err != nil {
 		t.Errorf("valid spec rejected: %v", err)
+	}
+	withEnv := spec()
+	withEnv.Env = map[string]string{"DATABASE_URL": "postgresql://x", "APP_SECRET": "s3cr3t=with=equals"}
+	withEnv.UseDB = true
+	if err := withEnv.Validate(); err != nil {
+		t.Errorf("valid env spec rejected: %v", err)
 	}
 }

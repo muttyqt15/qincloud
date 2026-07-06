@@ -32,6 +32,12 @@ const (
 	// dials app containers by name on it, so every app must attach here.
 	appNet = "app_net"
 
+	// tenantDBNet is the external bridge apps join with AppSpec.UseDB: the
+	// shared Postgres is on it, and NOTHING else — redis, the exporters, and
+	// controld stay unreachable from tenant workloads (invariant #3 at the
+	// network layer, not just per-service auth). Created by bootstrap.sh.
+	tenantDBNet = "tenant_db_net"
+
 	// appLabel marks every container controld owns. RemoveAppExcept finds
 	// containers by it, so it is the source of truth for "which containers
 	// belong to app X".
@@ -103,8 +109,13 @@ func (c *Client) Pull(ctx context.Context, imageRef string) error {
 // it reaches the app by container name over app_net (docker DNS).
 func (c *Client) StartApp(ctx context.Context, spec deploy.AppSpec, deployID int64) (string, error) {
 	name := deploy.ContainerName(spec.Name, deployID)
+	env := make([]string, 0, len(spec.Env))
+	for k, v := range spec.Env {
+		env = append(env, k+"="+v)
+	}
 	cfg := &container.Config{
 		Image:  spec.Image,
+		Env:    env,
 		Labels: map[string]string{appLabel: spec.Name},
 	}
 	// PidsLimit is a pointer in the SDK: nil means "leave unchanged", so the
@@ -126,6 +137,9 @@ func (c *Client) StartApp(ctx context.Context, spec deploy.AppSpec, deployID int
 	}
 	netCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{appNet: {}},
+	}
+	if spec.UseDB {
+		netCfg.EndpointsConfig[tenantDBNet] = &network.EndpointSettings{}
 	}
 
 	created, err := c.api.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)

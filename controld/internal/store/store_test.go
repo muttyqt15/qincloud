@@ -8,6 +8,7 @@ package store
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil || app == nil {
 		t.Fatalf("GetApp after upsert = %+v, %v", app, err)
 	}
-	if app.AppSpec != spec {
+	if !reflect.DeepEqual(app.AppSpec, spec) {
 		t.Fatalf("stored spec %+v, want %+v", app.AppSpec, spec)
 	}
 	if app.ContainerID != "" {

@@ -14,13 +14,18 @@ import (
 
 // AppSpec is everything controld needs to run and route one app.
 type AppSpec struct {
-	Name          string // [a-z0-9-], <=32 chars; container is named qc-<name>-<deployID>
-	Image         string // full image ref, e.g. traefik/whoami:v1.10
-	ContainerPort int    // port the app listens on inside the container
-	Host          string // hostname Caddy routes to this app, e.g. whoami.sparboard.com
+	Name          string            // [a-z0-9-], <=32 chars; container is named qc-<name>-<deployID>
+	Image         string            // full image ref, e.g. traefik/whoami:v1.10
+	ContainerPort int               // port the app listens on inside the container
+	Host          string            // hostname Caddy routes to this app, e.g. whoami.sparboard.com
+	Env           map[string]string // container environment; values may be secrets — render KEYS only
+	UseDB         bool              // attach tenant_db_net (shared Postgres reachable; redis is NOT on it)
 }
 
-var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var (
+	nameRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // Validate rejects a spec that would produce a broken deploy. Fail here,
 // loud, not three layers down in the Docker API.
@@ -36,6 +41,11 @@ func (s AppSpec) Validate() error {
 	}
 	if s.Host == "" {
 		return fmt.Errorf("app %s: host is required", s.Name)
+	}
+	for k := range s.Env {
+		if !envKeyRe.MatchString(k) {
+			return fmt.Errorf("app %s: env key %q: must match %s", s.Name, k, envKeyRe)
+		}
 	}
 	return nil
 }
