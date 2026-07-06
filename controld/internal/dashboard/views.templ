@@ -41,15 +41,17 @@ templ IndexPage(apps []deploy.App, latest map[string]deploy.DeployRecord, now ti
 		</section>
 		<div id="flash"></div>
 		<!--
-			The poll condition pauses list refresh while ANY htmx request is in
-			flight: an unconditional innerHTML swap would replace a destroy/
-			redeploy button mid-request, erasing its .htmx-request guard and
-			re-arming it for a double click.
+			The poll pauses only while a request INSIDE #apps is in flight (a
+			destroy/redeploy button): an unconditional innerHTML swap would
+			replace that button mid-request, erasing its .htmx-request guard and
+			re-arming it for a double click. Scoped to '#apps' on purpose — a
+			deploy or a minutes-long image pull in the modal must NOT freeze the
+			live status of every app.
 		-->
 		<div
 			id="apps"
 			hx-get="/apps"
-			hx-trigger="every 3s [document.querySelectorAll('.htmx-request').length === 0]"
+			hx-trigger="every 3s [document.querySelectorAll('#apps .htmx-request').length === 0]"
 			hx-swap="innerHTML"
 		>
 			@AppList(apps, latest, now)

@@ -24,6 +24,23 @@ document.body.addEventListener("htmx:afterSwap", function (e) {
   if (btn) btn.disabled = !hasPort;
 });
 
+// Editing the image invalidates the resolved port IMMEDIATELY — before the
+// (async, seconds-long) re-resolve returns. Without this, resolving image A
+// then editing to image B and clicking Deploy in one gesture submits B with
+// A's port: the port passes range validation, B starts, Caddy dials the wrong
+// port, and every request 502s while the deploy reads "live". Clearing the
+// port field and disabling submit on every keystroke means a port only ever
+// exists for the image currently shown as resolved.
+document.body.addEventListener("input", function (e) {
+  if (!e.target || e.target.name !== "image") return;
+  const form = e.target.closest("form");
+  if (!form) return;
+  const result = form.querySelector("#image-result");
+  if (result) result.innerHTML = "";
+  const btn = form.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+});
+
 // A successful deploy fires HX-Trigger: deploy-started from the server. Close
 // and fully reset the dialog so the next open starts clean (form.reset() does
 // not remove the htmx-injected port field, so clear #image-result by hand).
