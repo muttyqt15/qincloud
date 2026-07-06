@@ -14,7 +14,7 @@ off-the-shelf software, wired together by the config in this repo.
                        │ 80/443 (only public ports)
                  ┌─────▼─────┐
                  │   Caddy   │  auto-TLS, routing, JSON access logs
-                 │  (edge)   │  admin API on 127.0.0.1:2019
+                 │  (edge)   │  admin API on unix socket; :2019 metrics-only
                  └─────┬─────┘
               app_net  │
         ┌──────────┬───┴──────┬────────────┐

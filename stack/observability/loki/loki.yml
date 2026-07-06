@@ -1,0 +1,44 @@
+# Loki single-binary, filesystem storage — right-sized for one box; chunks
+# and index live in the loki_data volume, retention enforced by the compactor.
+
+auth_enabled: false # single tenant behind private networks; no multi-tenancy needed
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: "2025-01-01"
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem # required when retention_enabled
+
+limits_config:
+  retention_period: 14d
+
+analytics:
+  reporting_enabled: false

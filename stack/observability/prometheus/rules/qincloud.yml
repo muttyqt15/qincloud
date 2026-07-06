@@ -1,0 +1,59 @@
+# Starter alert pack. Everything routes to Discord via Alertmanager.
+# Validate: promtool check rules qincloud.yml
+
+groups:
+  - name: qincloud
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target down: {{ $labels.job }}"
+          description: "{{ $labels.instance }} ({{ $labels.job }}) has been unreachable for 3m."
+
+      - alert: DiskUsageHigh
+        # exclude pseudo/ephemeral filesystems so overlay mounts don't duplicate the root fs
+        expr: |
+          100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs"}
+                     / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs"})
+          > 85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk >85% on {{ $labels.mountpoint }}"
+          description: "{{ $labels.device }} at {{ $labels.mountpoint }} is {{ $value | humanize }}% full."
+
+      - alert: MemoryHigh
+        expr: |
+          100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host memory >90% used"
+          description: "Memory usage at {{ $value | humanize }}% for 10m (box has 7.7GB total)."
+
+      - alert: ContainerRestartLoop
+        # each restart bumps the container's start time; >2 changes in 15m = crash loop
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 2
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is restart-looping"
+          description: "{{ $labels.name }} restarted {{ $value }} times in the last 15m."
+
+      # BackupStale placeholder — the backup job (M2) will publish
+      # qincloud_backup_last_success_timestamp_seconds (node-exporter textfile
+      # collector or pushgateway TBD). Until that metric exists this expr
+      # returns an empty vector, so the rule is inert but ready.
+      - alert: BackupStale
+        expr: time() - qincloud_backup_last_success_timestamp_seconds > 129600 # 36h = one missed nightly + slack
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nightly backup is stale"
+          description: "Last successful backup was more than 36h ago."

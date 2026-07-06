@@ -1,0 +1,41 @@
+# stack/edge/Caddyfile — cold-start baseline for the QinCloud edge.
+# M4: controld takes ownership of routes via the admin API; from then
+# on this file is only the boot config, not the live routing table.
+{
+	# Admin API on a unix socket only: app_net is shared with tenant apps
+	# (M6), and any container on that bridge could otherwise POST /load and
+	# reprogram the edge. controld (M4) must reach it via a shared mount of
+	# /run/caddy-admin.sock — never over a network.
+	admin unix//run/caddy-admin.sock
+
+	# Runtime logs as JSON on stdout — Loki scrapes docker logs (M3).
+	log {
+		output stdout
+		format json
+	}
+}
+
+# No domain yet: plain HTTP placeholder. Pointing a domain at the box and
+# adding a site block (or an M4 admin-API route) activates auto-TLS.
+:80 {
+	# JSON access logs to stdout for Loki (M3).
+	log {
+		output stdout
+		format json
+	}
+
+	respond /healthz 200
+	respond "qincloud edge ok" 200
+}
+
+# Metrics-only listener so Prometheus can keep scraping caddy:2019 over
+# app_net. Read-only exposition endpoint — the mutable admin API is NOT here.
+:2019 {
+	handle /metrics {
+		metrics
+	}
+	# Fail loud on anything else — admin paths (/load, /config/) are gone.
+	handle {
+		respond 404
+	}
+}

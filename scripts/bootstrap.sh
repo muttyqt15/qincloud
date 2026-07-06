@@ -19,7 +19,7 @@ trap 'die "failed at line $LINENO: $BASH_COMMAND"' ERR
 log "base packages"
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates ufw fail2ban python3-systemd \
-  unattended-upgrades >/dev/null
+  unattended-upgrades rclone >/dev/null # rclone: backup.sh/restore-drill.sh → R2
 
 log "sshd: key-only auth"
 install -d -m 0755 /etc/ssh/sshd_config.d

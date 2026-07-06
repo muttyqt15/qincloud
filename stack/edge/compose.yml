@@ -1,0 +1,40 @@
+# stack/edge/compose.yml — Caddy edge proxy. The ONLY stack allowed to publish
+# public ports (80/443); everything else stays on bridge networks behind it.
+#
+# Run on the box:
+#   docker compose --project-directory /opt/qincloud/stack/edge up -d
+
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC) — active once a domain + TLS exist
+    # Admin API lives on a unix socket inside the container (see Caddyfile) —
+    # never on app_net, never in ports:. controld (M4) drives it via a shared
+    # mount of the socket. :2019 serves only read-only Prometheus metrics.
+    networks:
+      - app_net
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # /data holds certs + ACME account — must survive recreation or we
+      # re-issue on every deploy and hit Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  app_net:
+    external: true
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,41 @@
+// Alloy — ships every docker container's stdout/stderr to Loki, labeled by
+// compose project + service so LogQL can select {stack="edge"} etc.
+// Reads via the docker socket (mounted ro), positions persist in alloy_data.
+
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+// targets = [] : this block only holds the relabel rules for loki.source.docker
+discovery.relabel "containers" {
+	targets = []
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		target_label  = "stack"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+}
+
+loki.source.docker "containers" {
+	host          = "unix:///var/run/docker.sock"
+	targets       = discovery.docker.containers.targets
+	relabel_rules = discovery.relabel.containers.rules
+	forward_to    = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

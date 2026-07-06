@@ -1,0 +1,68 @@
+# stack/data — Postgres + Redis, private data_net only. Never published.
+# Run on the box:
+#   cd /opt/qincloud/stack/data && docker compose --env-file /opt/qincloud/.env up -d
+name: qincloud-data
+
+services:
+  postgres:
+    image: postgres:16.9-alpine
+    # fixed name: scripts/backup.sh targets the container by name
+    container_name: qincloud-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in /opt/qincloud/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/qincloud/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - data_net
+    # default 64mb /dev/shm stalls parallel workers and big sorts
+    shm_size: 128mb
+    mem_limit: 1g
+    healthcheck:
+      # $$ so the check reads the container's own env, not compose interpolation
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7.4.2-alpine
+    # fixed name: scripts/backup.sh targets the container by name
+    container_name: qincloud-redis
+    restart: unless-stopped
+    # AOF on: RDB snapshots alone can lose everything since the last save.
+    # requirepass: every app container on data_net can reach redis — without
+    # auth any one of them could FLUSHALL or read another app's keys
+    command:
+      [
+        "redis-server",
+        "--appendonly", "yes",
+        "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in /opt/qincloud/.env}",
+        "--maxmemory", "256mb",
+        "--maxmemory-policy", "noeviction",
+      ]
+    environment:
+      # redis-cli auto-authenticates from this — keeps the healthcheck and the
+      # docker-exec redis-cli calls in scripts/backup.sh working unchanged
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    networks:
+      - data_net
+    # headroom above maxmemory for the fork/COW spike during BGSAVE
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  data_net:
+    external: true

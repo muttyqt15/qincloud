@@ -1,0 +1,13 @@
+# qincloud-backup.timer — daily 03:00 box time. Install: see qincloud-backup.service.
+
+[Unit]
+Description=Daily 03:00 QinCloud backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# run on next boot if the box was down at 03:00 — never silently skip a night
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

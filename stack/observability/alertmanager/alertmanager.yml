@@ -1,0 +1,20 @@
+# Alertmanager — everything routes to one Discord channel.
+#
+# Alertmanager does NOT interpolate env vars in its config, which is exactly
+# why the webhook comes in via webhook_url_file: compose exposes the box's
+# gitignored /opt/qincloud/secrets/discord_webhook (a file containing only
+# the webhook URL) as a file-secret at /run/secrets/discord_webhook.
+# Validate: amtool check-config alertmanager.yml
+
+route:
+  receiver: discord
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h # re-ping every 4h while an alert stays firing
+
+receivers:
+  - name: discord
+    discord_configs:
+      - webhook_url_file: /run/secrets/discord_webhook
+        send_resolved: true

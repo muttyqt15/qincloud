@@ -1,0 +1,23 @@
+# qincloud-backup.service — oneshot wrapper for scripts/backup.sh, fired by
+# qincloud-backup.timer. Install on the box:
+#   install -m 0644 /opt/qincloud/scripts/systemd/qincloud-backup.service \
+#                   /opt/qincloud/scripts/systemd/qincloud-backup.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now qincloud-backup.timer
+
+[Unit]
+Description=QinCloud nightly Postgres + Redis backup to R2
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# secrets stay in the gitignored .env, never in this unit
+EnvironmentFile=/opt/qincloud/.env
+ExecStart=/opt/qincloud/scripts/backup.sh
+# dumps are CPU/IO-noisy; stay polite to the running apps on a 4-vCPU box
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# a backup stuck >30min is a failure, not patience
+TimeoutStartSec=1800
