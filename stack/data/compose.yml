@@ -12,8 +12,15 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in /opt/qincloud/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/qincloud/.env}
+      # consumed by initdb/01-controld.sh on first boot of a fresh volume:
+      # the dedicated controld role's password (CONTROLD_DSN uses this role,
+      # never the cluster superuser)
+      CONTROLD_DB_PASSWORD: ${CONTROLD_DB_PASSWORD:?set CONTROLD_DB_PASSWORD in /opt/qincloud/.env}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # runs ONLY on a fresh pgdata volume — see initdb/01-controld.sh for
+      # the one-time commands on an already-initialized box
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     networks:
       - data_net
     # default 64mb /dev/shm stalls parallel workers and big sorts

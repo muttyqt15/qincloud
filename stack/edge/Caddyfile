@@ -1,12 +1,17 @@
-# stack/edge/Caddyfile — cold-start baseline for the QinCloud edge.
-# M4: controld takes ownership of routes via the admin API; from then
-# on this file is only the boot config, not the live routing table.
+# stack/edge/Caddyfile — first-boot seed for the QinCloud edge.
+# M4: controld owns routes via the admin API, and caddy runs with --resume
+# (see compose.yml): after the first API change, the autosaved JSON config is
+# what boots — this file no longer applies on restart. Editing it requires an
+# explicit `caddy reload --config /etc/caddy/Caddyfile`, which drops all
+# controld-programmed routes (re-deploy each app afterwards).
 {
 	# Admin API on a unix socket only: app_net is shared with tenant apps
 	# (M6), and any container on that bridge could otherwise POST /load and
 	# reprogram the edge. controld (M4) must reach it via a shared mount of
-	# /run/caddy-admin.sock — never over a network.
-	admin unix//run/caddy-admin.sock
+	# /run/caddy/admin.sock — never over a network. The socket gets its own
+	# dir so the caddy_admin volume can be mounted at /run/caddy without
+	# shadowing everything else in /run.
+	admin unix//run/caddy/admin.sock
 
 	# Runtime logs as JSON on stdout — Loki scrapes docker logs (M3).
 	log {
@@ -15,8 +20,14 @@
 	}
 }
 
-# No domain yet: plain HTTP placeholder. Pointing a domain at the box and
-# adding a site block (or an M4 admin-API route) activates auto-TLS.
+# No domain yet: plain HTTP placeholder. Admin-API routes inserted into this
+# :80 server are HTTP-only — they never activate auto-TLS (no :443 server, no
+# cert issuance; the published 443 port is a dead end until then). Auto-TLS
+# starts when a site block with a real hostname is added (M6). That splits
+# the config into a :443 server plus a :80 redirect server — a topology
+# controld's route targeting does not support yet, and caddyapi fails the
+# deploy loud when it sees it rather than routing apps into the redirect
+# server (reachable over HTTP, dark over HTTPS).
 :80 {
 	# JSON access logs to stdout for Loki (M3).
 	log {

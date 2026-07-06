@@ -68,6 +68,38 @@ ssh root@<box> 'bash /root/bootstrap.sh'
 ssh root@<box> 'tailscale up'        # open the printed auth URL
 ```
 
+## Rebuild from zero (invariant #4 as a procedure)
+
+Order matters; each step fails loud if a dependency is missing.
+
+1. **Host baseline** — bootstrap + Tailscale (section above). Creates the
+   `app_net`/`data_net` bridges every stack joins.
+2. **Repo** — clone (or rsync) this repo to `/opt/qincloud`.
+3. **Secrets** — recreate the gitignored pieces:
+   - `.env` from `.env.example` — **reuse the ORIGINAL secret values** (from
+     your password manager), don't generate fresh ones. Step 6 restores
+     `pg_globals`, which resets every role password to the *backed-up*
+     values; a freshly generated `POSTGRES_PASSWORD` would leave controld
+     and both exporters failing auth while the postgres healthcheck stays
+     green (it checks over local trust).
+   - `install -o 65534 -g 65534 -m 400 <webhook-file> /opt/qincloud/secrets/discord_webhook`
+4. **stack/edge** — up first: it creates the `caddy_admin` volume (admin
+   socket) that stack/controld mounts.
+5. **stack/data** — up; wait for the postgres healthcheck.
+6. **Restore from R2** — the real restore is manual by design
+   (`restore-drill.sh` only rehearses into a throwaway container, never the
+   real cluster). Fetch the newest `postgres/_globals/` and per-database
+   `postgres/<db>/` objects (rclone env config as in `backup.sh`), then
+   `psql` the globals and `pg_restore --create` each database into
+   `qincloud-postgres`.
+7. **stack/observability** — up; then install the backup schedule:
+   `cp scripts/systemd/qincloud-backup.* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now qincloud-backup.timer`
+8. **stack/controld** — up (`--build`). `controld list` shows which apps the
+   restored database says should exist.
+9. **Redeploy every app** — `controld deploy` each one: the rebuilt Caddy has
+   no autosave so no app routes exist yet, and the app containers are gone —
+   a deploy recreates both.
+
 ## Milestones
 
 | #   | What                                                        | Status |

@@ -1,0 +1,53 @@
+# stack/controld — the QinCloud control plane (M4+). Build + run on the box:
+#   docker compose --project-directory /opt/qincloud/stack/controld --env-file /opt/qincloud/.env up -d --build
+#
+# ORDERING: stack/edge must be up from its CURRENT compose file first — it
+# creates and owns the external caddy_admin volume (admin socket at
+# /run/caddy/admin.sock) mounted below. An edge stack started before the
+# admin-socket layout existed must be RECREATED, not just reloaded:
+#   docker compose --project-directory /opt/qincloud/stack/edge up -d --force-recreate
+# Otherwise every deploy fails at the routing step with
+# "dial unix /run/caddy/admin.sock: connect: no such file or directory".
+#
+# CLI:
+#   docker exec qincloud-controld controld deploy -app whoami -image traefik/whoami:v1.10 -port 80 -host whoami.sparboard.com
+#   docker exec qincloud-controld controld list
+
+services:
+  controld:
+    build: ../../controld
+    container_name: qincloud-controld
+    restart: unless-stopped
+    environment:
+      # postgresql://qincloud:<pw>@qincloud-postgres:5432/controld?sslmode=disable
+      CONTROLD_DSN: ${CONTROLD_DSN:?}
+    volumes:
+      # The two capabilities controld exists to hold — the container runtime
+      # and the edge router. Nothing else on the box gets either.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - caddy_admin:/run/caddy
+    ports:
+      - "${TS_IP:?}:8600:8600" # Tailscale-only; M5 dashboard mounts here
+    networks:
+      # data_net only — deliberately NOT app_net. controld needs nothing from
+      # it (Caddy is driven over the unix socket above, Docker over
+      # docker.sock, and deployed apps are attached to app_net by the daemon,
+      # not by controld's own membership). Staying off app_net keeps :8600 —
+      # which will carry the M5 dashboard, in a container holding docker.sock —
+      # unreachable from tenant workloads: invariant #3 inside the docker
+      # network boundary, not just at the TS_IP-bound host port.
+      - data_net # reach qincloud-postgres
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8600/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  data_net:
+    external: true
+
+volumes:
+  caddy_admin:
+    external: true # created and owned by stack/edge

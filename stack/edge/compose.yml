@@ -8,6 +8,23 @@ services:
   caddy:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
+    # The image's default CMD plus --resume. Routes controld programs via the
+    # admin API live only in Caddy's runtime config; Caddy autosaves every API
+    # change to /config/caddy/autosave.json (persisted in the caddy_config
+    # volume), and --resume boots from that autosave when it exists. Without
+    # it, ANY restart — host reboot, OOM-kill under mem_limit, image bump,
+    # compose recreate — reloads the bare Caddyfile and silently unroutes
+    # every deployed app: containers keep running (unless-stopped), the store
+    # still says live, but every request gets the catch-all 200.
+    # TRADEOFF: once autosave.json exists, Caddyfile edits no longer apply at
+    # boot — the Caddyfile is the first-boot seed only. To apply an edit,
+    # reload it explicitly (this replaces the autosave and DROPS all
+    # controld-programmed routes; re-deploy each app afterwards):
+    #   docker compose --project-directory /opt/qincloud/stack/edge \
+    #     exec caddy caddy reload --config /etc/caddy/Caddyfile
+    # Note --resume does not cover a rebuilt box (fresh volume, no autosave):
+    # restoring routes from the controld DB needs a reconcile in controld.
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume
     ports:
       - "80:80"
       - "443:443"
@@ -22,7 +39,13 @@ services:
       # /data holds certs + ACME account — must survive recreation or we
       # re-issue on every deploy and hit Let's Encrypt rate limits.
       - caddy_data:/data
+      # /config holds caddy/autosave.json — the API-written live config that
+      # --resume (see command:) boots from. Must survive recreation or every
+      # restart would drop the controld-programmed routes.
       - caddy_config:/config
+      # Admin socket dir (see Caddyfile) — shared with stack/controld so it
+      # can drive the admin API over the socket, never over a network.
+      - caddy_admin:/run/caddy
     mem_limit: 256m
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
@@ -38,3 +61,7 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  # Explicit name (no compose-project prefix) so stack/controld can mount
+  # the same socket dir as `external: true` under a stable name.
+  caddy_admin:
+    name: caddy_admin
