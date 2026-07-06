@@ -1,0 +1,5 @@
+# secrets — names are documented in .env.example
+.env
+*.env
+!.env.example
+secrets/
