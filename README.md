@@ -42,6 +42,7 @@ qincloud/
 │   └── observability/  # Prometheus, Grafana, Loki, Alertmanager (M3)
 ├── scripts/            # bootstrap.sh, backup.sh, restore-drill.sh
 ├── runbooks/           # runbooks, drills, postmortems — the SRE paper trail
+│   └── gotchas/        # living per-domain rules; update in the same commit as the fix
 └── README.md
 ```
 
