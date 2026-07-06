@@ -73,9 +73,9 @@ ssh root@<box> 'tailscale up'        # open the printed auth URL
 | #   | What                                                        | Status |
 | --- | ----------------------------------------------------------- | ------ |
 | M0  | Host baseline: UFW, fail2ban, sshd, Docker, Tailscale        | ✅     |
-| M1  | Edge: Caddy auto-TLS + admin API                             | —      |
-| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | —      |
-| M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | —      |
+| M1  | Edge: Caddy auto-TLS + admin API                             | ✅     |
+| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | 🟡 stack live; backups await R2 creds |
+| M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | 🟡 all up except Alertmanager (awaits Discord webhook) |
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| —      |
 | M5  | controld dashboard (templ + htmx)                            | —      |
 | M6  | Onboard first real app                                       | —      |
