@@ -41,7 +41,7 @@ qincloud/
 │   ├── edge/           # Caddy: TLS, routing, access logs (M1)
 │   ├── data/           # Postgres + Redis, private networks only (M2)
 │   └── observability/  # Prometheus, Grafana, Loki, Alertmanager (M3)
-├── scripts/            # bootstrap.sh, backup.sh, restore-drill.sh
+├── scripts/            # bootstrap.sh, backup.sh, restore-drill.sh, deploy-edge.sh
 ├── runbooks/           # runbooks, drills, postmortems — the SRE paper trail
 │   └── gotchas/        # living per-domain rules; update in the same commit as the fix
 └── README.md

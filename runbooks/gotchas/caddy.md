@@ -1,5 +1,15 @@
 # Caddy gotchas
 
+## Applying a Caddyfile change: use `scripts/deploy-edge.sh`
+
+Do NOT hand-run the reload dance. `scripts/deploy-edge.sh` (run on the box
+after syncing the repo) is the one self-verifying command for any edge config
+change: it validates the on-disk file, heals a stale bind mount (see below),
+reloads, restores every app route the reload dropped, and verifies each app
+host responds before it exits non-zero on any failure. `--dry-run` validates
+only. The manual steps below are what it automates — kept for understanding,
+not for hand-running.
+
 ## The autosave is the truth, not the Caddyfile
 
 Caddy runs with `--resume` (`stack/edge/compose.yml`): after first boot it
@@ -11,7 +21,19 @@ via the admin API. The Caddyfile is a **first-boot seed only**.
 - Recovery if it happens (or after a fresh `caddy_config` volume):
   `controld deploy` every app; each deploy re-upserts its route.
 - Changing the Caddyfile legitimately (new seed behavior) = accept the route
-  wipe: edit → `rm autosave.json` → recreate container → redeploy all apps.
+  wipe: edit → recreate/reload → redeploy all apps. `deploy-edge.sh` does
+  exactly this, in order, and verifies it.
+
+## rsync temp-rename serves a stale Caddyfile (bind-mount trap)
+
+`rsync` (without `--inplace`) writes a temp file then renames it, giving the
+host path a NEW inode while the container keeps the OLD one — so the container
+serves the pre-edit Caddyfile and every `caddy adapt`/`reload` reads stale,
+with no error and `validate` still passing. This silently cost hours once.
+Two defenses, both in place: sync with `rsync --inplace`, and
+`deploy-edge.sh` checksums the container's mounted file against the on-disk
+one and recreates the container when they differ. To check by hand:
+`docker exec edge-caddy-1 sha256sum /etc/caddy/Caddyfile` vs the host file.
 
 ## App routes must land at index 0
 
