@@ -69,6 +69,12 @@ type Docker interface {
 	// RemoveAppExcept stops and removes every qincloud.app=<app> container
 	// except keepID (pass "" to remove all). Idempotent; absent is not an error.
 	RemoveAppExcept(ctx context.Context, app, keepID string) error
+	// RemoveContainer stops and removes one container by name or ID.
+	// Idempotent; absent is not an error. Failure paths use this to retire
+	// exactly the container their own deploy created — a sweep keyed on a
+	// remembered "previous live" ID would remove the routed container when
+	// that memory is stale (see deploy.go).
+	RemoveContainer(ctx context.Context, nameOrID string) error
 }
 
 // Router programs the edge (Caddy admin API over its unix socket).
@@ -123,4 +129,17 @@ type App struct {
 	AppSpec
 	ContainerID string // current live container; "" if never deployed
 	UpdatedAt   time.Time
+}
+
+// DeployRecord is one row of deploy history, as read back from the store.
+// The Deployer only writes these (via Store); readers (CLI, dashboard) get
+// them through store methods outside the deploy.Store interface.
+type DeployRecord struct {
+	ID         int64
+	AppName    string
+	Image      string
+	Status     Status
+	Error      string // non-empty only for StatusFailed
+	StartedAt  time.Time
+	FinishedAt *time.Time // nil until the deploy reaches live/failed
 }

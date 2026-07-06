@@ -3,11 +3,11 @@
 //	validate → lock app → record → pull → start+wait-ready → route → record live → retire old
 //
 // The old container keeps serving until the new one is ready AND routed, so a
-// failed deploy never takes the app down: any step failure removes the new
-// container (everything except the previous live one), marks the deploy
-// failed, and leaves the previous state intact. Cleanup and failure recording
-// run on a context detached from the deploy's, because the deploy context's
-// death is itself a common failure cause.
+// failed deploy never takes the app down: any step failure removes exactly
+// the container this deploy created (by name), marks the deploy failed, and
+// leaves the previous state intact. Cleanup, failure recording, and the
+// post-route bookkeeping all run on contexts detached from the deploy's,
+// because the deploy context's death is itself a common failure cause.
 package deploy
 
 import (
@@ -46,24 +46,48 @@ func (d *Deployer) Deploy(ctx context.Context, spec AppSpec) error {
 	}
 
 	// One deploy per app at a time, across processes: two interleaved deploys
-	// would each read the same previous container and sweep "everything
-	// except" it — the loser removing the winner's routed container. Fail
-	// fast; the operator retries once the other invocation finishes.
+	// would race the route switch and the happy-path sweep — the loser's
+	// "retire everything except my container" removing the winner's routed
+	// one. Fail fast; the operator retries once the other invocation finishes.
 	release, err := d.locker.AcquireAppLock(ctx, spec.Name)
 	if err != nil {
 		return fmt.Errorf("lock app %s: %w", spec.Name, err)
 	}
 	defer release()
 
-	// The previous live container (if any) is both the fallback that keeps
-	// serving during this deploy and the thing we retire once routed.
-	prevID := ""
-	if prev, err := d.store.GetApp(ctx, spec.Name); err != nil {
-		return fmt.Errorf("read app: %w", err)
-	} else if prev != nil {
-		prevID = prev.ContainerID
-	}
+	return d.deployLocked(ctx, spec)
+}
 
+// Redeploy re-runs the app's stored spec. The read happens INSIDE the app
+// lock: read outside it, a concurrent destroy could win the lock, remove the
+// app completely, and then the stale spec would resurrect it — an outcome no
+// serial order of the two operations can produce.
+func (d *Deployer) Redeploy(ctx context.Context, app string) error {
+	release, err := d.locker.AcquireAppLock(ctx, app)
+	if err != nil {
+		return fmt.Errorf("lock app %s: %w", app, err)
+	}
+	defer release()
+
+	prev, err := d.store.GetApp(ctx, app)
+	if err != nil {
+		return fmt.Errorf("read app: %w", err)
+	}
+	if prev == nil {
+		return fmt.Errorf("no such app: %s", app)
+	}
+	return d.deployLocked(ctx, prev.AppSpec)
+}
+
+// deployLocked is the deploy body; the caller holds the app lock.
+//
+// Failure paths retire exactly the container THIS deploy created (by its
+// deterministic name), never "everything except the recorded live one": the
+// record can be stale — SetLiveContainer may have failed after an earlier
+// route switch — and a sweep keyed on it would remove the routed container.
+// Strays a failed cleanup leaves behind are swept by the next successful
+// deploy's retirement, which keys on its own fresh container.
+func (d *Deployer) deployLocked(ctx context.Context, spec AppSpec) error {
 	if err := d.store.UpsertApp(ctx, spec); err != nil {
 		return fmt.Errorf("record app: %w", err)
 	}
@@ -71,6 +95,7 @@ func (d *Deployer) Deploy(ctx context.Context, spec AppSpec) error {
 	if err != nil {
 		return fmt.Errorf("record deploy: %w", err)
 	}
+	newName := ContainerName(spec.Name, id)
 
 	if err := d.step(ctx, id, StatusPulling, func() error {
 		return d.docker.Pull(ctx, spec.Image)
@@ -82,12 +107,15 @@ func (d *Deployer) Deploy(ctx context.Context, spec AppSpec) error {
 	if err := d.step(ctx, id, StatusStarting, func() error {
 		cid, err := d.docker.StartApp(ctx, spec, id)
 		if err != nil {
+			// StartApp can fail after creating the named container; remove by
+			// name so a half-created one doesn't linger either.
+			d.removeNew(ctx, newName)
 			return err
 		}
 		newID = cid
 		if err := d.docker.WaitReady(ctx, cid, ReadyTimeout); err != nil {
 			// Not ready in time: retire it; the old container is still routed.
-			d.cleanupKeeping(ctx, spec.Name, prevID)
+			d.removeNew(ctx, newName)
 			return err
 		}
 		return nil
@@ -96,10 +124,10 @@ func (d *Deployer) Deploy(ctx context.Context, spec AppSpec) error {
 	}
 
 	if err := d.step(ctx, id, StatusRouting, func() error {
-		dial := fmt.Sprintf("%s:%d", ContainerName(spec.Name, id), spec.ContainerPort)
+		dial := fmt.Sprintf("%s:%d", newName, spec.ContainerPort)
 		if err := d.router.UpsertRoute(ctx, spec.Name, spec.Host, dial); err != nil {
 			// Route not switched: retire the new container, old keeps serving.
-			d.cleanupKeeping(ctx, spec.Name, prevID)
+			d.removeNew(ctx, newName)
 			return err
 		}
 		return nil
@@ -107,24 +135,43 @@ func (d *Deployer) Deploy(ctx context.Context, spec AppSpec) error {
 		return err
 	}
 
-	// The new container is routed; the old one is now unreachable. Record the
-	// new container as live BEFORE retiring the old one: dying between the
-	// two then leaves an extra unrouted container (swept by the next
-	// successful deploy) — the reverse order could leave container_id
-	// pointing at an already-removed container, and a LATER failed deploy's
-	// cleanup would keep that stale ID and remove the routed container
-	// instead: hard downtime.
-	if err := d.store.SetLiveContainer(ctx, spec.Name, newID); err != nil {
+	// Past this point the new container is routed and serving: the deploy has
+	// succeeded in the world, and everything left is bookkeeping and
+	// retirement. All of it runs detached from the deploy context — the
+	// context's death here (budget expiry mid-route, Ctrl-C) must not be able
+	// to leave the record lying about which container is live, or the deploys
+	// row stuck mid-state.
+	tail, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+
+	// Record the new container as live BEFORE retiring the old one: dying
+	// between the two leaves only an extra unrouted container (swept by the
+	// next successful deploy) — the reverse order could leave container_id
+	// pointing at an already-removed container.
+	if err := d.store.SetLiveContainer(tail, spec.Name, newID); err != nil {
 		// The app IS serving on the new container, but the record now lies
-		// about which container is live — the exact fact cleanupKeeping
-		// trusts. Fail loud (not warn-and-continue) and remove nothing: both
-		// containers stay up, and the next successful deploy re-records and
-		// sweeps.
-		return d.failDeploy(ctx, id, fmt.Errorf("record live container: %w", err))
+		// about which container is live. Fail loud (not warn-and-continue)
+		// and remove nothing: both containers stay up, and the next
+		// successful deploy re-records and sweeps.
+		return d.failDeploy(tail, id, fmt.Errorf("record live container: %w", err))
 	}
-	// Retire the old container — best-effort: the app is live and recorded.
-	d.cleanupKeeping(ctx, spec.Name, newID)
-	return d.store.SetDeployStatus(ctx, id, StatusLive, "")
+	// Retire everything except the new container — best-effort: the app is
+	// live and recorded, and newID is fresh from this very deploy, so the
+	// sweep cannot hit the routed container.
+	d.cleanupKeeping(tail, spec.Name, newID)
+	return d.store.SetDeployStatus(tail, id, StatusLive, "")
+}
+
+// removeNew retires the container this deploy created, on a detached context
+// for the same reason as failDeploy: the cleanup often runs BECAUSE the
+// deploy context died. Best-effort — the step's own error is the thing worth
+// surfacing, and a stray container is swept by the next successful deploy.
+func (d *Deployer) removeNew(ctx context.Context, name string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if err := d.docker.RemoveContainer(ctx, name); err != nil {
+		fmt.Printf("warn: remove container %s: %v\n", name, err)
+	}
 }
 
 // Destroy removes an app entirely: route first (stop traffic), then
@@ -178,14 +225,13 @@ func (d *Deployer) failDeploy(ctx context.Context, id int64, cause error) error 
 	return cause
 }
 
-// cleanupKeeping removes every container of the app except keepID — the
-// mid-deploy failure paths retire the new container with it (keep = previous
-// live), the happy path retires the old one (keep = new). Best-effort: the
-// deploy outcome is the thing worth surfacing, not a cleanup hiccup. Like
-// failDeploy it detaches from the deploy context: when cleanup is triggered
-// by that context's death, running on it would fail every docker call and
-// leak a running restart=unless-stopped container (up to 512MB) until some
-// later deploy of the same app happens to sweep it.
+// cleanupKeeping removes every container of the app except keepID. Only the
+// happy path calls it (keep = the container this very deploy routed), which
+// is what makes the sweep safe: keepID is fresh, never a stale record.
+// Best-effort: the deploy outcome is the thing worth surfacing, not a
+// cleanup hiccup. Detached from the deploy context like failDeploy — a
+// leaked restart=unless-stopped container costs up to 512MB until some
+// later deploy sweeps it.
 func (d *Deployer) cleanupKeeping(ctx context.Context, app, keepID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()

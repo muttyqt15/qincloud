@@ -261,6 +261,23 @@ func lastHealthLine(h *container.Health) string {
 	return "no health log output"
 }
 
+// RemoveContainer stops (10s grace) and removes one container by name or ID.
+// Absent at any step is success: something else already did the job.
+func (c *Client) RemoveContainer(ctx context.Context, nameOrID string) error {
+	stopGrace := stopGraceSeconds
+	err := c.api.ContainerStop(ctx, nameOrID, container.StopOptions{Timeout: &stopGrace})
+	if err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("stop %s: %w", nameOrID, err)
+	}
+	// Force also covers the race where the container restarted between the
+	// stop above and this remove.
+	err = c.api.ContainerRemove(ctx, nameOrID, container.RemoveOptions{Force: true})
+	if err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("remove %s: %w", nameOrID, err)
+	}
+	return nil
+}
+
 // RemoveAppExcept stops (10s grace) and removes every qincloud.app=<app>
 // container — running or not — except keepID. A container that vanishes
 // between list and stop/remove is success, not error: something else already

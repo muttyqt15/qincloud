@@ -7,18 +7,42 @@ Code: `controld/internal/deploy/deploy.go` (state machine),
 
 The old container keeps serving until the new one is **ready AND routed**:
 
-- pull/start/route failures → clean up only the *new* container
-  (`cleanupKeeping(prevID)`), record `failed`, old route untouched.
+- pull/start/route failures retire **exactly the container this deploy
+  created, by name** (`removeNew`), record `failed`, old route untouched.
 - `SetLiveContainer(newID)` happens **before** retiring the old container.
 - If you touch the state machine, run `deploy_test.go` first — the
   keeps-old-serving cases (`TestNotReadyKeepsOldContainerServing`,
-  `TestRouteFailureKeepsOldContainerServing`) are the contract.
+  `TestRouteFailureKeepsOldContainerServing`,
+  `TestFailedDeployAfterStaleLiveRecordKeepsRoutedContainer`) are the contract.
 
-## Cleanup must survive a cancelled request
+## Never sweep on a remembered ID — the record can be stale
 
-Failure recording and container cleanup run on `context.WithoutCancel(ctx)`
-with a 30s budget. A user hitting Ctrl-C mid-deploy must not leave an
-orphaned container or a deploy row stuck in `starting`.
+Found by the M5 adversarial review, live in M4 for a while: failure cleanup
+used to remove "everything except the recorded live container". But
+`SetLiveContainer` can fail *after* a route switch, leaving `container_id`
+stale — the next failed deploy's sweep would then keep the stale old
+container and **remove the routed one**: hard downtime from a failed deploy.
+Rule: a failure path may only remove what it itself created (deterministic
+name `qc-<app>-<deployID>`); only the happy path sweeps, keyed on its own
+fresh container. Class: any "clean up everything except X" where X is read
+from state that can lag reality.
+
+## Reads that feed an action must happen under the action's lock
+
+Redeploy = read spec → deploy it. Reading outside the app lock is a TOCTOU:
+a destroy can win the lock between read and deploy, and the stale spec then
+*resurrects the destroyed app* — an outcome no serial order produces. Hence
+`Deployer.Redeploy(name)` reads the spec inside the lock; callers (dashboard,
+future CLI) pass only the name. Never GetApp-then-Deploy around it.
+
+## Everything after the route switch runs detached
+
+Once the new container is routed, the deploy has succeeded in the world —
+recording the live container, retiring the old one, and stamping `live` all
+run on `context.WithoutCancel` (30s budget), like failure recording always
+did. The deploy context dying right after the route switch (budget expiry,
+Ctrl-C) must not fail the deploy or leave the record lying.
+(`TestPostRouteBookkeepingSurvivesDeadDeployContext`)
 
 ## Per-app concurrency = pg advisory lock
 

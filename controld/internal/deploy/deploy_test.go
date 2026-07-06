@@ -58,8 +58,17 @@ func (f *fakeDocker) RemoveAppExcept(ctx context.Context, app, keepID string) er
 	return nil
 }
 
+func (f *fakeDocker) RemoveContainer(ctx context.Context, nameOrID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	delete(f.containers, nameOrID) // fake IDs = names; absent is not an error
+	return nil
+}
+
 type fakeRouter struct {
 	upsertErr error
+	onUpsert  func()            // runs after a successful upsert — lets a test kill the deploy ctx right after the route switch
 	routes    map[string]string // app → dial
 }
 
@@ -70,6 +79,9 @@ func (f *fakeRouter) UpsertRoute(ctx context.Context, app, host, dial string) er
 		return f.upsertErr
 	}
 	f.routes[app] = dial
+	if f.onUpsert != nil {
+		f.onUpsert()
+	}
 	return nil
 }
 
@@ -121,6 +133,12 @@ func (f *fakeStore) SetDeployStatus(ctx context.Context, id int64, s Status, err
 }
 
 func (f *fakeStore) SetLiveContainer(ctx context.Context, app, cid string) error {
+	// Honor the context like the real pgx adapter would: this write runs
+	// after the route switch, and the tests must prove it survives the deploy
+	// context dying right there.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if f.liveErr != nil {
 		return f.liveErr
 	}
@@ -440,6 +458,119 @@ func TestFailureCleanupAndRecordSurviveDeadDeployContext(t *testing.T) {
 	}
 	if last := st.transitions[len(st.transitions)-1]; last != StatusFailed {
 		t.Fatalf("last transition = %v, want failed recorded on a detached context", last)
+	}
+}
+
+// A SetLiveContainer failure leaves the record stale: the routed container is
+// deploy 2's, but container_id still names deploy 1's. A LATER failed deploy
+// must not trust that stale record — its cleanup may remove only what IT
+// created, never the routed container. (Found by the M5 review: the old
+// "remove all except recorded-live" sweep caused hard downtime here.)
+func TestFailedDeployAfterStaleLiveRecordKeepsRoutedContainer(t *testing.T) {
+	dk, rt, st, _, d := setup()
+
+	if err := d.Deploy(context.Background(), spec()); err != nil {
+		t.Fatalf("deploy 1: %v", err)
+	}
+	st.liveErr = errors.New("pg blip")
+	if err := d.Deploy(context.Background(), spec()); err == nil {
+		t.Fatal("deploy 2: want record-live failure")
+	}
+	st.liveErr = nil
+	// State now: route → qc-whoami-2, record still says qc-whoami-1. Deploy 3
+	// fails at readiness.
+	dk.readyErr = errors.New("crashloop")
+	if err := d.Deploy(context.Background(), spec()); err == nil {
+		t.Fatal("deploy 3: want readiness failure")
+	}
+
+	if rt.routes["whoami"] != "qc-whoami-2:80" {
+		t.Fatalf("route = %q, want the serving container untouched", rt.routes["whoami"])
+	}
+	if _, alive := dk.containers["qc-whoami-2"]; !alive {
+		t.Fatal("the ROUTED container was removed by a failed deploy's cleanup — hard downtime")
+	}
+	if _, gone := dk.containers["qc-whoami-3"]; gone {
+		t.Fatal("deploy 3's own failed container was not retired")
+	}
+}
+
+// The deploy context dying immediately after the route switch must not fail
+// the deploy: the app is serving, so recording the live container, retiring
+// the old one, and stamping StatusLive must all run detached.
+func TestPostRouteBookkeepingSurvivesDeadDeployContext(t *testing.T) {
+	dk, rt, st, _, d := setup()
+
+	if err := d.Deploy(context.Background(), spec()); err != nil {
+		t.Fatalf("first deploy: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt.onUpsert = cancel // the deploy budget expires right after the route switch…
+
+	if err := d.Deploy(ctx, spec()); err != nil {
+		t.Fatalf("deploy failed although the app is routed and serving: %v", err)
+	}
+	if st.apps["whoami"].ContainerID != "qc-whoami-2" {
+		t.Fatalf("record = %q, want the routed container recorded live", st.apps["whoami"].ContainerID)
+	}
+	if len(dk.containers) != 1 {
+		t.Fatalf("containers = %v, want the old one retired despite the dead context", dk.containers)
+	}
+	if last := st.transitions[len(st.transitions)-1]; last != StatusLive {
+		t.Fatalf("last transition = %v, want live recorded on a detached context", last)
+	}
+}
+
+// Redeploy reads the spec under the app lock. Its contract: absent app is an
+// error, and the spec deployed is whatever the store holds at lock time.
+func TestRedeployUsesCurrentStoredSpec(t *testing.T) {
+	dk, rt, st, _, d := setup()
+
+	if err := d.Deploy(context.Background(), spec()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	st.apps["whoami"].Image = "traefik/whoami:v1.11" // spec changed since (e.g. CLI deploy elsewhere)
+
+	if err := d.Redeploy(context.Background(), "whoami"); err != nil {
+		t.Fatalf("redeploy: %v", err)
+	}
+	if got := st.apps["whoami"].Image; got != "traefik/whoami:v1.11" {
+		t.Fatalf("stored image = %q, want the current spec preserved", got)
+	}
+	if rt.routes["whoami"] != "qc-whoami-2:80" {
+		t.Fatalf("route = %q, want the redeployed container", rt.routes["whoami"])
+	}
+	if _, oldAlive := dk.containers["qc-whoami-1"]; oldAlive {
+		t.Fatal("old container was not retired by redeploy")
+	}
+}
+
+func TestRedeployAbsentAppFailsWithoutSideEffects(t *testing.T) {
+	dk, rt, st, lk, d := setup()
+
+	err := d.Redeploy(context.Background(), "ghost")
+	if err == nil || !strings.Contains(err.Error(), "no such app") {
+		t.Fatalf("err = %v, want no-such-app", err)
+	}
+	if len(st.transitions) != 0 || len(dk.containers) != 0 || len(rt.routes) != 0 {
+		t.Fatal("redeploy of an absent app must touch nothing")
+	}
+	if len(lk.held) != 0 {
+		t.Fatalf("lock still held: %v", lk.held)
+	}
+}
+
+func TestRedeployFailsFastWhileAppLocked(t *testing.T) {
+	_, _, st, lk, d := setup()
+
+	lk.held["whoami"] = true // a deploy or destroy is in flight elsewhere
+	if err := d.Redeploy(context.Background(), "whoami"); err == nil {
+		t.Fatal("want error while another operation holds the app lock")
+	}
+	if len(st.transitions) != 0 {
+		t.Fatalf("transitions = %v, want none", st.transitions)
 	}
 }
 
