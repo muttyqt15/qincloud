@@ -105,6 +105,9 @@ Order matters; each step fails loud if a dependency is missing.
 9. **Redeploy every app** — `controld deploy` each one: the rebuilt Caddy has
    no autosave so no app routes exist yet, and the app containers are gone —
    a deploy recreates both.
+10. **Close public ssh** — `scripts/close-public-ssh.sh` (refuses to run
+    unless tailscale is up). From here sshd answers on the tailnet only;
+    recovery without tailscale = provider web console → `ufw limit 22/tcp`.
 
 ## Milestones
 

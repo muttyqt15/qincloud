@@ -32,8 +32,12 @@ TLS handshake timeouts against registry-1.docker.io come and go. Any
 procedure that pulls many images (rebuild, new stack) needs a retry loop;
 consider a registry mirror if it worsens.
 
-## Residual risk (open)
+## SSH is tailnet-only (closed 2026-07-06)
 
-Public `:22` is still open (rate-limited, key-only). Once comfortable with
-Tailscale reliability, move sshd to tailnet-only — deliberately, since a
-tailscale outage then requires the provider console.
+Public `:22` is closed; ufw admits ssh on `tailscale0` only
+(`scripts/close-public-ssh.sh`, rebuild step 10). Connect via
+`ssh root@100.125.12.20` — the public IP no longer answers on 22. If
+tailscale breaks: provider web console → `ufw limit 22/tcp` to reopen
+temporarily, fix tailscale, re-run the script. A FRESH box necessarily
+starts with public 22 (bootstrap.sh keeps the `limit` rule) until
+tailscale is authenticated — closing it is deliberately the last step.

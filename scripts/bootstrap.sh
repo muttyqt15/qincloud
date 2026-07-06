@@ -40,6 +40,9 @@ EOF
 sshd -t
 systemctl reload ssh
 
+# Public 22 stays open here by necessity: a fresh box has no authenticated
+# tailscale yet. scripts/close-public-ssh.sh (rebuild step 10) closes it
+# once tailscale is up.
 log "ufw: default deny incoming, allow 22/80/443"
 ufw default deny incoming >/dev/null
 ufw default allow outgoing >/dev/null
