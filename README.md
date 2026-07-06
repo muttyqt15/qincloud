@@ -106,12 +106,12 @@ Order matters; each step fails loud if a dependency is missing.
 | --- | ----------------------------------------------------------- | ------ |
 | M0  | Host baseline: UFW, fail2ban, sshd, Docker, Tailscale        | ✅     |
 | M1  | Edge: Caddy auto-TLS + admin API                             | ✅     |
-| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | 🟡 stack live; backups await R2 API keys |
+| M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | ✅ nightly timer live; BackupStale alert armed |
 | M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | ✅ pager drill 2026-07-06: real outage → Discord page → resolved |
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
 | M5  | controld dashboard (templ + htmx)                            | —      |
 | M6  | Onboard first real app                                       | —      |
 | M7  | SLOs + error-budget burn alerts                              | —      |
-| M8  | DR rehearsal: restore drill, measured RTO/RPO                | —      |
+| M8  | DR rehearsal: restore drill, measured RTO/RPO                | 🟡 restore drill ✅ (RTO 4s, RPO ≤24h); full box-rebuild rehearsal pending |
 | M9  | Failure drills + blameless postmortems                       | —      |
 | M10 | Agent-ops                                                    | —      |

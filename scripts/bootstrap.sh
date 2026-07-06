@@ -18,9 +18,17 @@ trap 'die "failed at line $LINENO: $BASH_COMMAND"' ERR
 
 log "base packages"
 apt-get update -qq
-# rclone: backup.sh/restore-drill.sh → R2; rsync: deploy path (laptop → box)
+# rsync: deploy path (laptop → box); unzip: rclone's installer needs it
 apt-get install -y -qq curl ca-certificates ufw fail2ban python3-systemd \
-  unattended-upgrades rclone rsync >/dev/null
+  unattended-upgrades rsync unzip >/dev/null
+
+log "rclone (upstream — backup.sh/restore-drill.sh → R2)"
+# noble's apt rclone is 1.60 (2022), which predates R2 quirk handling and
+# 501s (NotImplemented) on the first attempt of every upload — install
+# current upstream instead
+if ! command -v rclone >/dev/null || rclone version | grep -q "^rclone v1.60"; then
+  curl -fsSL https://rclone.org/install.sh | bash >/dev/null 2>&1 || die "rclone install failed"
+fi
 
 log "sshd: key-only auth"
 install -d -m 0755 /etc/ssh/sshd_config.d

@@ -134,10 +134,14 @@ services:
       # rather than export wrong data (use network_mode: host if ever needed)
       - --no-collector.netdev
       - --no-collector.netstat
+      # host-side jobs publish here (backup.sh → qincloud_backup.prom, read
+      # by the BackupStale alert)
+      - --collector.textfile.directory=/host/metrics
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
+      - /opt/qincloud/metrics:/host/metrics:ro
     networks:
       - obs
     mem_limit: 64m

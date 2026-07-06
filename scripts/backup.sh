@@ -147,4 +147,15 @@ gzip "$rdb"
 upload_verified "$rdb.gz" "redis"
 prune_remote "redis"
 
+# --- publish success for the BackupStale alert --------------------------------
+# node-exporter's textfile collector scrapes /opt/qincloud/metrics (mounted
+# ro into the container); tmp+mv because the collector may read mid-write.
+# Only reached on full success — a failing backup leaves the timestamp stale,
+# which is exactly what fires BackupStale after 36h.
+readonly METRICS_DIR=/opt/qincloud/metrics
+install -d -m 0755 "$METRICS_DIR"
+printf '# HELP qincloud_backup_last_success_timestamp_seconds Unix time of the last fully successful backup run.\n# TYPE qincloud_backup_last_success_timestamp_seconds gauge\nqincloud_backup_last_success_timestamp_seconds %s\n' \
+  "$(date +%s)" > "$METRICS_DIR/.qincloud_backup.prom.tmp"
+mv "$METRICS_DIR/.qincloud_backup.prom.tmp" "$METRICS_DIR/qincloud_backup.prom"
+
 log "backup complete: ${#databases[@]} postgres dump(s) + 1 redis snapshot @ $TS"
