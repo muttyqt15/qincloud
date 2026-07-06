@@ -1,0 +1,16 @@
+# Grafana dashboard provider — loads JSON models from defs/ so a rebuilt box
+# has its dashboards with zero clicking (same intent as datasources.yml).
+# The JSON lives in a subdir so Grafana doesn't try to parse this provider
+# YAML as a dashboard.
+apiVersion: 1
+
+providers:
+  - name: qincloud
+    orgId: 1
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true # edit in the UI to iterate; export back into defs/ to persist
+    options:
+      path: /etc/grafana/provisioning/dashboards/defs
+      foldersFromFilesStructure: false

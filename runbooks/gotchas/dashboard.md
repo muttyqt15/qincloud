@@ -15,6 +15,30 @@ new route mounted on its mux is automatically behind the edge auth on the
 public path, but NEVER weaken the site-block-wide `basic_auth` to
 per-path.
 
+### The hash: cost 10, adapt-time, rotation-needs-reload
+
+- **Cost 10, not Caddy's default 14.** The public door lets an
+  unauthenticated client force a bcrypt hash per request — cost 14 (~1.4s
+  CPU) is a DoS lever on the single shared edge. Cost 10 (~60ms) cuts the
+  amplification ~16x and is still uncrackable for a `openssl rand` password.
+  Caddy's `hash-password` is fixed at 14, so generate with
+  `htpasswd -nbB -C 10`. Real rate-limiting is Cloudflare's job (see below).
+- **Adapt-time `{$DASH_PASSWORD_HASH}`, not runtime `{env.…}`.** basic_auth
+  base64-wraps its account password; a runtime `{env.}` placeholder lands
+  raw where base64 is expected and Caddy crash-loops on provision
+  (`base64-decoding password: illegal base64 data`). Adapt-time resolves +
+  wraps correctly. Cost: the hash is baked into `autosave.json`, so
+  **rotating the password needs a `caddy reload` + redeploy dance**, not a
+  container recreate — a plain recreate keeps serving the old hash.
+
+### Residual: public door has no rate limit (Cloudflare pending)
+
+Even at cost 10, an unauthenticated flood still amplifies (~60ms CPU/req)
+and the origin IP is exposed while DNS is grey-cloud. The real fix is
+fronting dash.sparboard.com with Cloudflare (orange-cloud: WAF + rate limit
++ hidden origin), then locking Caddy's dash site to Cloudflare's IP ranges.
+Needs a Cloudflare API token / dashboard access — tracked, not yet done.
+
 ## CSRF is the HX-Request header — under basic auth too
 
 A drive-by page in the operator's browser can form-POST to either door (the

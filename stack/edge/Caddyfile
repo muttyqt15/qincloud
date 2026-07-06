@@ -46,13 +46,15 @@ dash.sparboard.com {
 		format json
 	}
 
-	# {env.*} is a RUNTIME placeholder, not adapt-time {$...}: the hash stays a
-	# placeholder in autosave.json and Caddy resolves it from the process env
-	# on each provision, so rotating DASH_PASSWORD_HASH + recreating the
-	# container actually takes effect (an adapt-time value would be frozen in
-	# the autosave that --resume boots from).
+	# Adapt-time {$...}: Caddy resolves the env var and base64-wraps the hash
+	# into the JSON config at adapt time. (The runtime {env.} form does NOT
+	# work here — basic_auth base64-encodes its account password, and a
+	# runtime placeholder lands raw where base64 is expected → provision
+	# fails.) TRADEOFF: the resolved hash is baked into autosave.json, so
+	# rotating DASH_PASSWORD_HASH needs a `caddy reload` (the same
+	# reload-then-redeploy dance as any Caddyfile edit), not just a recreate.
 	basic_auth {
-		admin {env.DASH_PASSWORD_HASH}
+		admin {$DASH_PASSWORD_HASH}
 	}
 
 	reverse_proxy qincloud-controld:8600

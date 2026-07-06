@@ -27,13 +27,18 @@ services:
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume
     environment:
       # bcrypt hash for the dash.sparboard.com basic_auth (Caddyfile reads it
-      # at runtime as {env.DASH_PASSWORD_HASH}). Generate:
-      #   docker exec edge-caddy-1 caddy hash-password --plaintext '<password>'
-      # CRITICAL: a bcrypt hash is "$2a$14$...". Compose interpolates $ in
-      # .env values, so the raw hash gets mangled (every "$x" eaten as an
-      # empty variable) and basic_auth then rejects the correct password.
-      # Store it in /opt/qincloud/.env with every $ DOUBLED:
-      #   DASH_PASSWORD_HASH=$$2a$$14$$...
+      # at adapt time as {$DASH_PASSWORD_HASH}). Generate at cost 10 — the
+      # public door lets an unauthenticated client trigger the hash per
+      # request, so cost 14 (~1.4s) is a CPU-exhaustion lever; cost 10
+      # (~60ms) is still uncrackable for a random password. Caddy's own
+      # hash-password is fixed at cost 14, so use htpasswd:
+      #   docker run --rm httpd:2.4-alpine htpasswd -nbB -C 10 admin '<pw>'
+      #   (take the part after "admin:")
+      # CRITICAL: a bcrypt hash is "$2y$10$...". Compose interpolates $ in
+      # .env values, so store it with every $ DOUBLED:
+      #   DASH_PASSWORD_HASH=$$2y$$10$$...
+      # Rotating it needs a `caddy reload` (adapt-time value is baked into
+      # autosave.json), i.e. the reload-then-redeploy dance — not a recreate.
       DASH_PASSWORD_HASH: ${DASH_PASSWORD_HASH:?set DASH_PASSWORD_HASH in /opt/qincloud/.env}
     ports:
       - "80:80"
