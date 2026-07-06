@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"qincloud/controld/internal/caddyapi"
+	"qincloud/controld/internal/dashboard"
 	"qincloud/controld/internal/deploy"
 	"qincloud/controld/internal/dockerx"
 	"qincloud/controld/internal/store"
@@ -57,12 +58,24 @@ func usage() {
 	os.Exit(2)
 }
 
-// serve is the container's main process: liveness now, dashboard in M5.
+// serve is the container's main process: /healthz plus the M5 dashboard.
+// Wiring failure (DB not up yet) exits nonzero and compose restarts us —
+// stack/data is ordered before stack/controld, so this only loops during a
+// cold boot race, and the healthcheck makes the looping visible.
 func serve() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	d, st, cleanup, err := wire(ctx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
+	dashboard.New(st, d).Register(mux)
 	srv := &http.Server{
 		Addr:    ":8600",
 		Handler: mux,
@@ -75,27 +88,28 @@ func serve() error {
 }
 
 // wire builds the deployer from its four capabilities. Linear, no factories:
-// this is the entire dependency graph of the control plane.
-func wire(ctx context.Context) (*deploy.Deployer, func(), error) {
+// this is the entire dependency graph of the control plane. The store comes
+// back alongside the deployer — the dashboard reads history through it.
+func wire(ctx context.Context) (*deploy.Deployer, *store.Store, func(), error) {
 	dsn := mustEnv("CONTROLD_DSN")
 	st, err := store.Connect(ctx, dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: %w", err)
+		return nil, nil, nil, fmt.Errorf("store: %w", err)
 	}
 	if err := st.Init(ctx); err != nil {
 		st.Close()
-		return nil, nil, fmt.Errorf("apply schema: %w", err)
+		return nil, nil, nil, fmt.Errorf("apply schema: %w", err)
 	}
 	dk, err := dockerx.New()
 	if err != nil {
 		st.Close()
-		return nil, nil, fmt.Errorf("docker: %w", err)
+		return nil, nil, nil, fmt.Errorf("docker: %w", err)
 	}
 	rt := caddyapi.New(envOr("CADDY_ADMIN_SOCK", "/run/caddy/admin.sock"))
 	// Per-app cross-process lock, on the same database the store uses.
 	lk := &pgAppLock{dsn: dsn}
 	cleanup := func() { st.Close(); _ = dk.Close() }
-	return deploy.New(dk, rt, st, lk), cleanup, nil
+	return deploy.New(dk, rt, st, lk), st, cleanup, nil
 }
 
 func deployCmd(args []string) error {
@@ -109,7 +123,7 @@ func deployCmd(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	d, cleanup, err := wire(ctx)
+	d, _, cleanup, err := wire(ctx)
 	if err != nil {
 		return err
 	}
@@ -164,7 +178,7 @@ func destroyCmd(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	d, cleanup, err := wire(ctx)
+	d, _, cleanup, err := wire(ctx)
 	if err != nil {
 		return err
 	}

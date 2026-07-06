@@ -187,6 +187,68 @@ func (s *Store) ListApps(ctx context.Context) ([]deploy.App, error) {
 	return apps, nil
 }
 
+// deployColumns is the single source of column order for scanDeploy, the
+// same way appColumns is for scanApp.
+const deployColumns = "id, app_name, image, status, error, started_at, finished_at"
+
+func scanDeploy(row pgx.Row) (deploy.DeployRecord, error) {
+	var d deploy.DeployRecord
+	err := row.Scan(&d.ID, &d.AppName, &d.Image, &d.Status, &d.Error, &d.StartedAt, &d.FinishedAt)
+	return d, err
+}
+
+// ListDeploys returns app's deploy history, newest first. Not part of
+// deploy.Store — the state machine never reads history; the dashboard does.
+func (s *Store) ListDeploys(ctx context.Context, app string, limit int) ([]deploy.DeployRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+deployColumns+` FROM deploys
+		WHERE app_name = $1
+		ORDER BY started_at DESC, id DESC
+		LIMIT $2`,
+		app, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list deploys for %s: %w", app, err)
+	}
+	defer rows.Close()
+	deploys := []deploy.DeployRecord{}
+	for rows.Next() {
+		d, err := scanDeploy(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan deploy: %w", err)
+		}
+		deploys = append(deploys, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list deploys for %s: %w", app, err)
+	}
+	return deploys, nil
+}
+
+// LatestDeploys returns each app's most recent deploy, keyed by app name —
+// the one-query projection behind every "current status" badge. id breaks
+// same-instant started_at ties (identity column: higher id = later insert).
+func (s *Store) LatestDeploys(ctx context.Context) (map[string]deploy.DeployRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (app_name) `+deployColumns+` FROM deploys
+		ORDER BY app_name, started_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("latest deploys: %w", err)
+	}
+	defer rows.Close()
+	latest := map[string]deploy.DeployRecord{}
+	for rows.Next() {
+		d, err := scanDeploy(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan deploy: %w", err)
+		}
+		latest[d.AppName] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("latest deploys: %w", err)
+	}
+	return latest, nil
+}
+
 // DeleteApp removes the app record; its deploy history goes with it
 // (ON DELETE CASCADE). Deleting a name that doesn't exist is an error —
 // on this control plane that is almost certainly a typo, not intent.

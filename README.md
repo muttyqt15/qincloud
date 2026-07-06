@@ -36,6 +36,7 @@ off-the-shelf software, wired together by the config in this repo.
 ```
 qincloud/
 ├── controld/           # Go control plane — the only custom code (M4+)
+│                       #   serve = /healthz + web dashboard on :8600 (M5)
 ├── stack/              # docker compose stacks, one project per concern
 │   ├── edge/           # Caddy: TLS, routing, access logs (M1)
 │   ├── data/           # Postgres + Redis, private networks only (M2)
@@ -110,7 +111,7 @@ Order matters; each step fails loud if a dependency is missing.
 | M2  | Data: Postgres/Redis + nightly pg_dump → R2                  | ✅ nightly timer live; BackupStale alert armed |
 | M3  | Observability: Prometheus, Grafana, Loki, Alertmanager       | ✅ pager drill 2026-07-06: real outage → Discord page → resolved |
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
-| M5  | controld dashboard (templ + htmx)                            | —      |
+| M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history + deploy/redeploy/destroy on :8600 (tailnet) |
 | M6  | Onboard first real app                                       | —      |
 | M7  | SLOs + error-budget burn alerts                              | —      |
 | M8  | DR rehearsal: restore drill, measured RTO/RPO                | 🟡 restore drill ✅ (RTO 4s, RPO ≤24h); full box-rebuild rehearsal pending |

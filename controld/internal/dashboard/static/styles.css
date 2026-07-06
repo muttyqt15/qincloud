@@ -1,0 +1,116 @@
+/* styles.css — dashboard styling. Served from the binary via go:embed; the
+   dashboard must render with zero external requests (tailnet-only page). */
+
+:root {
+  --bg: #0d1017;
+  --panel: #151a23;
+  --border: #262d3a;
+  --text: #d6dbe4;
+  --muted: #7d8696;
+  --accent: #7aa2f7;
+  --ok: #58c98c;
+  --err: #e06c75;
+  --warn: #e0af68;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.9rem 1.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+}
+
+.sub { color: var(--muted); font-size: 0.85rem; }
+
+main { max-width: 68rem; margin: 0 auto; padding: 1rem 1.4rem 3rem; }
+
+h2, h3 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+a { color: var(--accent); }
+
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: baseline;
+}
+
+th { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; }
+
+.muted { color: var(--muted); }
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.badge.live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.badge.failed { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.badge.progress { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.badge.muted { color: var(--muted); }
+
+form { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  flex: 1 1 12rem;
+}
+
+input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.45rem 0.9rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.danger:hover { border-color: var(--err); color: var(--err); }
+button.htmx-request { opacity: 0.5; pointer-events: none; }
+
+.row-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+.row-actions button { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+
+.flash { padding: 0.5rem 0.7rem; border-radius: 6px; margin: 0.6rem 0 0; }
+.flash.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.flash.error { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
+
+.error-text { color: var(--err); font-size: 0.82rem; max-width: 22rem; overflow-wrap: anywhere; }
+
+.specs { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.2rem; }
+.specs dt { color: var(--muted); }
+.specs dd { margin: 0; }

@@ -1,0 +1,168 @@
+// views.templ — every dashboard view. Templates render projections built by
+// Go helpers in dashboard.go (statusFor/deployStatusView/took); no state
+// logic lives in markup. Regenerate views_templ.go with: go tool templ generate
+package dashboard
+
+import (
+	"strconv"
+	"time"
+
+	"qincloud/controld/internal/deploy"
+)
+
+templ layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href="/static/styles.css"/>
+			<script src="/static/htmx.min.js"></script>
+		</head>
+		<body>
+			<header>
+				<a class="brand" href="/">qincloud</a>
+				<span class="sub">controld</span>
+			</header>
+			<main>
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+templ IndexPage(apps []deploy.App, latest map[string]deploy.DeployRecord, now time.Time) {
+	@layout("qincloud — apps") {
+		<section>
+			<h2>deploy</h2>
+			@DeployForm()
+			<div id="flash"></div>
+		</section>
+		<section>
+			<h2>apps</h2>
+			<!--
+				The poll condition pauses list refresh while ANY htmx request is in
+				flight: an unconditional innerHTML swap would replace a destroy/
+				redeploy button mid-request, erasing its .htmx-request guard and
+				re-arming it for a double click.
+			-->
+			<div
+				id="apps"
+				hx-get="/apps"
+				hx-trigger="every 3s [document.querySelectorAll('.htmx-request').length === 0]"
+				hx-swap="innerHTML"
+			>
+				@AppList(apps, latest, now)
+			</div>
+		</section>
+	}
+}
+
+templ DeployForm() {
+	<form hx-post="/deploy" hx-target="#flash" hx-swap="innerHTML" autocomplete="off">
+		<input name="name" placeholder="app name" required/>
+		<input name="image" placeholder="image, e.g. traefik/whoami:v1.10" required/>
+		<input name="port" placeholder="container port" inputmode="numeric" required/>
+		<input name="host" placeholder="host, e.g. app.sparboard.com" required/>
+		<button type="submit">deploy</button>
+	</form>
+}
+
+templ AppList(apps []deploy.App, latest map[string]deploy.DeployRecord, now time.Time) {
+	if len(apps) == 0 {
+		<p class="muted">no apps yet — deploy one above.</p>
+	} else {
+		<table>
+			<thead>
+				<tr><th>app</th><th>status</th><th>host</th><th>image</th><th>updated</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, a := range apps {
+					@appRow(a, latest, now)
+				}
+			</tbody>
+		</table>
+	}
+}
+
+templ appRow(a deploy.App, latest map[string]deploy.DeployRecord, now time.Time) {
+	<tr>
+		<td><a href={ templ.URL("/apps/" + a.Name) }>{ a.Name }</a></td>
+		<td>
+			@statusBadge(statusFor(a, latest, now))
+		</td>
+		<td><a href={ templ.URL("https://" + a.Host) } target="_blank" rel="noopener">{ a.Host }</a></td>
+		<td class="mono">{ a.Image }</td>
+		<td class="muted">{ a.UpdatedAt.UTC().Format("2006-01-02 15:04") }</td>
+		<td class="row-actions">
+			<button hx-post={ "/apps/" + a.Name + "/redeploy" } hx-target="#flash" hx-swap="innerHTML">redeploy</button>
+			<button
+				class="danger"
+				hx-post={ "/apps/" + a.Name + "/destroy" }
+				hx-target="#flash"
+				hx-swap="innerHTML"
+				hx-confirm={ "Destroy " + a.Name + "? Route, containers and history are removed." }
+			>destroy</button>
+		</td>
+	</tr>
+}
+
+templ statusBadge(s statusView) {
+	<span class={ "badge " + s.Class }>{ s.Label }</span>
+}
+
+templ AppPage(app deploy.App, deploys []deploy.DeployRecord, now time.Time) {
+	@layout("qincloud — " + app.Name) {
+		<p><a href="/">← apps</a></p>
+		<h2>{ app.Name }</h2>
+		<dl class="specs">
+			<dt>image</dt>
+			<dd class="mono">{ app.Image }</dd>
+			<dt>host</dt>
+			<dd><a href={ templ.URL("https://" + app.Host) } target="_blank" rel="noopener">{ app.Host }</a></dd>
+			<dt>port</dt>
+			<dd>{ strconv.Itoa(app.ContainerPort) }</dd>
+			<dt>container</dt>
+			<dd class="mono">{ shortID(app.ContainerID) }</dd>
+		</dl>
+		<h3>deploy history</h3>
+		<div id="history" hx-get={ "/apps/" + app.Name + "/history" } hx-trigger="every 3s" hx-swap="innerHTML">
+			@HistoryTable(deploys, now)
+		</div>
+	}
+}
+
+templ HistoryTable(deploys []deploy.DeployRecord, now time.Time) {
+	if len(deploys) == 0 {
+		<p class="muted">no deploys recorded.</p>
+	} else {
+		<table>
+			<thead>
+				<tr><th>#</th><th>status</th><th>image</th><th>started (UTC)</th><th>took</th><th>error</th></tr>
+			</thead>
+			<tbody>
+				for _, d := range deploys {
+					<tr>
+						<td class="muted">{ strconv.FormatInt(d.ID, 10) }</td>
+						<td>
+							@statusBadge(deployStatusView(d, now))
+						</td>
+						<td class="mono">{ d.Image }</td>
+						<td class="muted">{ d.StartedAt.UTC().Format("2006-01-02 15:04:05") }</td>
+						<td>{ took(d, now) }</td>
+						<td class="error-text">{ d.Error }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}
+
+templ Flash(msg string) {
+	<p class="flash ok">{ msg }</p>
+}
+
+templ FlashError(msg string) {
+	<p class="flash error">{ msg }</p>
+}
