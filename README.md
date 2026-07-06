@@ -124,7 +124,7 @@ Order matters; each step fails loud if a dependency is missing.
 | M4  | controld core: Docker SDK, Caddy client, deploy state machine| ✅ deploy/list/destroy live; whoami e2e; auto-TLS on sparboard.com |
 | M5  | controld dashboard (templ + htmx)                            | ✅ apps/status/history/stats/logs + deploy/redeploy/destroy; tailnet :8600 + https://dash.sparboard.com (basic auth) |
 | M6  | Onboard first real app                                       | ✅ Umami analytics live at analytics.sparboard.com ([runbook](runbooks/apps/umami.md)); AppSpec env + tenant_db_net |
-| M7  | SLOs + error-budget burn alerts                              | —      |
+| M7  | SLOs + error-budget burn alerts                              | ✅ 99.5% availability SLO, multiwindow-multiburn alerts + fast AppDown/PostgresDown/RedisDown, Grafana SLO board |
 | M8  | DR rehearsal: restore drill, measured RTO/RPO                | ✅ full box rebuild 2026-07-06: wipe → serving in ≈12 min ([drill](runbooks/drills/2026-07-06-m8-box-rebuild-drill.md)) |
-| M9  | Failure drills + blameless postmortems                       | —      |
+| M9  | Failure drills + blameless postmortems                       | ✅ postmortem template + failure-injection catalogue; AppDown pager drill 2026-07-07 |
 | M10 | Agent-ops                                                    | —      |

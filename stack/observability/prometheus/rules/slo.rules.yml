@@ -1,0 +1,146 @@
+# SLO rules for the user-facing apps served through Caddy (whoami, umami/analytics,
+# notes, and the control-plane dashboard host).
+#
+# ── SLO ────────────────────────────────────────────────────────────────────────
+#   Objective : 99.5% availability per app, measured over a rolling 30 days.
+#   Error budget : 0.5% (0.005) of the 30d window may be unavailable.
+#   SLI : availability = fraction of scrapes the app is "up". Good/total is
+#         computed as an up-ratio, NOT non-5xx/total, because Caddy is not
+#         exposing per-host HTTP request metrics on this box — see grounding.
+#
+# ── Metrics grounding (verified on the live Prometheus, 2026-07) ────────────────
+#   Caddy has NO server-level request metric here: the only caddy_* series that
+#   exist are caddy_admin_http_requests_total (admin API, not user traffic),
+#   caddy_config_* and caddy_reverse_proxy_upstreams_healthy. There is no
+#   caddy_http_requests_total and no caddy_http_request_duration_seconds_bucket,
+#   so a non-5xx/total request SLI is not possible. We therefore fall back to the
+#   up-ratio SLI the task prescribes.
+#
+#   Grounded series (all confirmed present via /api/v1/query):
+#     * qincloud_app_up{app=...}  — controld gauge, 1=up. Label `app` values are
+#       exactly: notes, umami, whoami. (job="controld", instance="qincloud-controld:8600")
+#     * up{job="controld"}        — scrape health of the controld process, which
+#       serves BOTH its /metrics AND the dashboard UI on qincloud-controld:8600.
+#       qincloud_app_up has no series for the dashboard itself, so the dashboard's
+#       availability is proxied by its host process being scrapable. Same port /
+#       same process ⇒ if the dashboard is down this goes to 0. Relabeled to
+#       app="dashboard" so all four apps share one keyed metric.
+#
+#   avg_over_time(<up-gauge>[window]) = fraction of that window the app was up
+#   = the availability ratio directly. 1 - ratio = the error ratio the burn
+#   alerts compare against the budget.
+#
+# ── Loading ─────────────────────────────────────────────────────────────────────
+#   prometheus.yml rule_files is `/etc/prometheus/rules/*.yml`; this file matches
+#   the glob, so no prometheus.yml change is needed.
+#   Validate on the box: promtool check rules slo.rules.yml
+
+groups:
+  # ── SLI recording rules ───────────────────────────────────────────────────────
+  # One availability-ratio series per app for every window a multiwindow-multiburn
+  # alert reads: 5m, 30m, 1h, 2h, 6h, 1d, 3d. Each rule is the union of the three
+  # controld app gauges plus the dashboard proxy, projected onto a single `app`
+  # label so downstream alerts are uniform.
+  - name: qincloud_slo_sli
+    rules:
+      - record: qincloud:sli_availability:ratio_rate5m
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[5m]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[5m])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate30m
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[30m]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[30m])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate1h
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[1h]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[1h])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate2h
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[2h]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[2h])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate6h
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[6h]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[6h])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate1d
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[1d]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[1d])), "app", "dashboard", "", "")
+
+      - record: qincloud:sli_availability:ratio_rate3d
+        expr: |
+          avg by (app) (avg_over_time(qincloud_app_up[3d]))
+          or
+          label_replace(avg(avg_over_time(up{job="controld"}[3d])), "app", "dashboard", "", "")
+
+  # ── Error-budget-burn alerts (Google SRE multiwindow-multiburn) ───────────────
+  # Budget = 0.005 (0.5%). Burn rate n ⇒ error ratio > n * 0.005. The long window
+  # detects a real burn; the short window (5m/30m/6h) is the reset guard so the
+  # alert clears fast once the burn stops. All four pairs together justify every
+  # recorded window. Everything routes to the one Discord receiver via the
+  # existing severity convention (critical = page, warning = ticket).
+  - name: qincloud_slo_burn
+    rules:
+      # Fast burn — 14.4x over 1h, confirmed by 5m. Budget exhausted in ~2 days.
+      - alert: SLOErrorBudgetBurnFast
+        expr: |
+          (1 - qincloud:sli_availability:ratio_rate1h) > (14.4 * 0.005)
+          and
+          (1 - qincloud:sli_availability:ratio_rate5m) > (14.4 * 0.005)
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} burning error budget fast (14.4x)"
+          description: "{{ $labels.app }} availability breached 99.5% at >14.4x burn over 1h (confirmed 5m). At this rate the 30d budget is gone in ~2 days."
+
+      # Slower burn — 6x over 6h, confirmed by 30m. Budget exhausted in ~5 days.
+      - alert: SLOErrorBudgetBurnSlow
+        expr: |
+          (1 - qincloud:sli_availability:ratio_rate6h) > (6 * 0.005)
+          and
+          (1 - qincloud:sli_availability:ratio_rate30m) > (6 * 0.005)
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} burning error budget (6x)"
+          description: "{{ $labels.app }} availability breached 99.5% at >6x burn over 6h (confirmed 30m). At this rate the 30d budget is gone in ~5 days."
+
+      # Ticket-level burn — 3x over 1d, confirmed by 2h.
+      - alert: SLOErrorBudgetBurnTicket3x
+        expr: |
+          (1 - qincloud:sli_availability:ratio_rate1d) > (3 * 0.005)
+          and
+          (1 - qincloud:sli_availability:ratio_rate2h) > (3 * 0.005)
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} eroding error budget (3x)"
+          description: "{{ $labels.app }} availability below 99.5% at >3x burn over 1d (confirmed 2h). Investigate before the budget is at risk."
+
+      # Slow ticket-level burn — 1x over 3d, confirmed by 6h.
+      - alert: SLOErrorBudgetBurnTicket1x
+        expr: |
+          (1 - qincloud:sli_availability:ratio_rate3d) > (1 * 0.005)
+          and
+          (1 - qincloud:sli_availability:ratio_rate6h) > (1 * 0.005)
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} trending over error budget (1x)"
+          description: "{{ $labels.app }} 3d availability is under the 99.5% objective (confirmed 6h). Sustained low-grade unavailability is spending the 30d budget."

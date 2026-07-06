@@ -46,6 +46,41 @@ groups:
           summary: "Container {{ $labels.name }} is restart-looping"
           description: "{{ $labels.name }} restarted {{ $value }} times in the last 15m."
 
+      # The fast "your app is actually down" page. App containers are NOT scrape
+      # targets, so InstanceDown (up==0) never covers them; qincloud_app_up is
+      # controld's own probe of each app's container. This is the only alert
+      # that pages when a deployed app stops running. The SLO burn alerts
+      # (slo.rules.yml) are deliberately slow — this is the fast one.
+      - alert: AppDown
+        expr: qincloud_app_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "App {{ $labels.app }} is down"
+          description: "controld reports {{ $labels.app }} has had no running container for 2m."
+
+      # pg_up / redis_up are the exporters' probes of the datastores themselves:
+      # 0 means the store is down even while its exporter (the scrape target) is
+      # still up, so InstanceDown would miss a datastore outage entirely.
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres is down"
+          description: "postgres-exporter reports Postgres unreachable for 2m — every app with a database is affected."
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "redis-exporter reports Redis unreachable for 2m."
+
       # BackupStale placeholder — the backup job (M2) will publish
       # qincloud_backup_last_success_timestamp_seconds (node-exporter textfile
       # collector or pushgateway TBD). Until that metric exists this expr
