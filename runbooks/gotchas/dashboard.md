@@ -31,13 +31,40 @@ per-path.
   **rotating the password needs a `caddy reload` + redeploy dance**, not a
   container recreate — a plain recreate keeps serving the old hash.
 
-### Residual: public door has no rate limit (Cloudflare pending)
+### Cloudflare fronts the door (done 2026-07-06)
 
-Even at cost 10, an unauthenticated flood still amplifies (~60ms CPU/req)
-and the origin IP is exposed while DNS is grey-cloud. The real fix is
-fronting dash.sparboard.com with Cloudflare (orange-cloud: WAF + rate limit
-+ hidden origin), then locking Caddy's dash site to Cloudflare's IP ranges.
-Needs a Cloudflare API token / dashboard access — tracked, not yet done.
+dash.sparboard.com is orange-clouded (explicit proxied A record → origin IP,
+overriding the grey-cloud wildcard): Cloudflare's WAF/DDoS mitigation is in
+front and the origin IP is hidden from DNS. Zone SSL mode is **Full**, so
+Caddy serves a self-signed cert (`tls internal`) on the dash site and needs
+no ACME (HTTP-01 can't pass the proxy). Caddy then locks the dash site to
+**Cloudflare's IP ranges** so the still-public origin IP can't be hit
+directly: `@cf remote_ip <CF ranges>` → `handle @cf { basic_auth; reverse_proxy }`,
+else `handle { respond 404 }`. Verified: direct-to-origin-IP hits get 404,
+only Cloudflare traffic reaches the bcrypt door.
+
+Three silent traps cost hours here (all: config looks applied, gate just
+isn't there):
+
+1. **rsync breaks a bind-mounted single file.** `rsync` writes a temp file
+   then renames it, so the host path gets a NEW inode while the container
+   keeps the OLD one — the container serves a STALE Caddyfile and every
+   `caddy adapt`/`reload` reads stale. Use `rsync --inplace` for bind-mounted
+   files, or `--force-recreate` the container to re-establish the mount. This
+   was the real cause; the two below are real but were red herrings under it.
+2. **Two `remote_ip` matchers in one Caddyfile collide** in Caddy 2.10's
+   adapter — one silently drops from the compiled config (`validate` still
+   passes). Keep the dash `@cf` gate as the ONLY remote_ip matcher; the
+   :2019 metrics listener stays plain (see its RESIDUAL note in the Caddyfile).
+3. **Backticks / `{$…}` / `{env.}` in a Caddyfile comment** make the lexer
+   swallow following directives. Keep in-block comments plain ASCII.
+
+Verify a Caddyfile change actually landed: `docker exec edge-caddy-1 grep <marker>
+/etc/caddy/Caddyfile` before trusting `caddy adapt` output.
+
+Rate-limiting is Cloudflare's now; an explicit CF rate-limit rule needs a
+token with Firewall-edit perms (optional — the origin lock already makes the
+bcrypt door unreachable to a direct flood).
 
 ## CSRF is the HX-Request header — under basic auth too
 

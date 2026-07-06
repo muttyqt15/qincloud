@@ -33,31 +33,43 @@ sparboard.com {
 	respond "qincloud edge ok" 200
 }
 
-# The controld dashboard, deliberately public (operator decision 2026-07-06)
-# behind edge basic auth — the dashboard drives docker.sock, so this site
-# block is a root-equivalent door: the bcrypt hash comes from the caddy
-# process env (DASH_PASSWORD_HASH via compose ← /opt/qincloud/.env), and
-# caddy reaches controld over admin_net, a bridge carrying only caddy,
-# controld, and prometheus. The TS_IP:8600 binding stays as the no-auth
-# tailnet path.
+# The controld dashboard, public behind Cloudflare + edge basic auth
+# (operator decision 2026-07-06). The dashboard drives docker.sock, so this
+# site block is a root-equivalent door; caddy reaches controld over admin_net
+# (caddy + controld + prometheus only). The TS_IP:8600 binding stays as the
+# no-auth tailnet path.
+# dash.sparboard.com: the controld dashboard, public behind Cloudflare + edge
+# basic auth. Full rationale lives in runbooks/gotchas/dashboard.md.
+# Two traps learned here, both silent (adapt succeeds, gate just missing):
+#  1. A named matcher must be POSITIVE (@cf remote_ip), not negated
+#     (not remote_ip): a "not remote_ip" matcher collides with the :2019
+#     block's remote_ip matcher in Caddy 2.10's adapter and one is dropped.
+#  2. Keep comments in this block plain ASCII (no backtick, no brace/dollar):
+#     those chars in a comment make the lexer swallow following directives.
 dash.sparboard.com {
 	log {
 		output stdout
 		format json
 	}
 
-	# Adapt-time {$...}: Caddy resolves the env var and base64-wraps the hash
-	# into the JSON config at adapt time. (The runtime {env.} form does NOT
-	# work here — basic_auth base64-encodes its account password, and a
-	# runtime placeholder lands raw where base64 is expected → provision
-	# fails.) TRADEOFF: the resolved hash is baked into autosave.json, so
-	# rotating DASH_PASSWORD_HASH needs a `caddy reload` (the same
-	# reload-then-redeploy dance as any Caddyfile edit), not just a recreate.
-	basic_auth {
-		admin {$DASH_PASSWORD_HASH}
-	}
+	# Origin serves a self-signed cert; the zone SSL mode is Full so Cloudflare
+	# accepts it. No ACME here (HTTP-01 cannot pass the orange-cloud proxy).
+	tls internal
 
-	reverse_proxy qincloud-controld:8600
+	# Only Cloudflare edge IPs reach the auth+proxy; the public origin IP,
+	# hit directly (bypassing Cloudflare's WAF/rate-limiting), falls through to
+	# 404 before any bcrypt. Ranges from cloudflare.com/ips (refreshed
+	# 2026-07-06).
+	@cf remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	handle @cf {
+		basic_auth {
+			admin {$DASH_PASSWORD_HASH}
+		}
+		reverse_proxy qincloud-controld:8600
+	}
+	handle {
+		respond 404
+	}
 }
 
 # HTTP side: keep the health endpoint for the container healthcheck, bounce
@@ -82,20 +94,19 @@ dash.sparboard.com {
 # Metrics-only listener for Prometheus. Caddy is on app_net (to proxy tenant
 # apps) AND admin_net, and this listener binds every interface — so without a
 # guard any tenant container on app_net could scrape it and enumerate every
-# co-tenant upstream + the control-plane's internal address. Gate it to the
-# admin_net subnet (fixed in bootstrap.sh); Prometheus scrapes from there.
+# Metrics for Prometheus. Listens on all interfaces (plain :2019, no matcher):
+# a second remote_ip matcher here collides with dash's @cf matcher in Caddy
+# 2.10's adapter and one silently drops, and binding to a fixed admin_net IP
+# proved fragile (see runbooks/gotchas/dashboard.md). RESIDUAL: a tenant app on
+# app_net can scrape these edge metrics (co-tenant hostnames + upstream dials —
+# a minor info leak, no auth/traffic exposure). Revisit if app_net ever carries
+# untrusted tenants; the real fix is a Caddy build with the metrics endpoint on
+# a dedicated admin listener.
 :2019 {
-	@admin remote_ip 10.201.7.0/24
-	handle @admin {
-		handle /metrics {
-			metrics
-		}
-		handle {
-			respond 404
-		}
+	handle /metrics {
+		metrics
 	}
-	# Anyone else (a tenant app on app_net) gets nothing.
 	handle {
-		respond 403
+		respond 404
 	}
 }
