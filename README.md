@@ -79,7 +79,9 @@ Order matters; each step fails loud if a dependency is missing.
 
 1. **Host baseline** — bootstrap + Tailscale (section above). Creates the
    `app_net`/`data_net` bridges every stack joins.
-2. **Repo** — clone (or rsync) this repo to `/opt/qincloud`.
+2. **Repo** — clone the private mirror to `/opt/qincloud`
+   (`git clone git@github.com:muttyqt15/qincloud.git`), or rsync from a laptop
+   working copy. The mirror is the off-box copy that makes this step possible.
 3. **Secrets** — recreate the gitignored pieces:
    - `.env` from `.env.example` — **reuse the ORIGINAL secret values** (from
      your password manager), don't generate fresh ones. Step 6 restores
