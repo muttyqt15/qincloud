@@ -38,9 +38,11 @@ const (
 	appNet = "app_net"
 
 	// tenantDBNet is the external bridge apps join with AppSpec.UseDB: the
-	// shared Postgres is on it, and NOTHING else — redis, the exporters, and
-	// controld stay unreachable from tenant workloads (invariant #3 at the
-	// network layer, not just per-service auth). Created by bootstrap.sh.
+	// shared Postgres and Redis are on it, and NOTHING else — the exporters
+	// and controld stay unreachable from tenant workloads (invariant #3 at
+	// the network layer, not just per-service auth). Reachability only:
+	// authorization is the per-app credentials from `controld provision`.
+	// Created by bootstrap.sh.
 	tenantDBNet = "tenant_db_net"
 
 	// appLabel marks every container controld owns. RemoveAppExcept finds
@@ -461,4 +463,61 @@ func (c *Client) RemoveAppExcept(ctx context.Context, app, keepID string) error 
 		}
 	}
 	return nil
+}
+
+// ExecCapture runs cmd inside a running container (by name or ID), feeding
+// stdin when non-empty, and returns combined stdout+stderr. env sets variables
+// on the exec process only — how provisioning hands psql/redis-cli a secret
+// without it ever appearing in argv (exec processes also inherit the
+// container's own env, e.g. POSTGRES_USER and REDISCLI_AUTH). A non-zero exit
+// code is an error carrying the output.
+//
+// stdin is written in full before the output is read. That is safe because
+// every payload here is tiny (a few statements of SQL, far below the pipe
+// buffer) — a payload large enough to fill the pipe while the process blocks
+// writing output would deadlock, so this helper is for small control-plane
+// commands, not bulk data.
+func (c *Client) ExecCapture(ctx context.Context, containerName string, cmd, env []string, stdin string) (string, error) {
+	created, err := c.api.ContainerExecCreate(ctx, containerName, container.ExecOptions{
+		Cmd:          cmd,
+		Env:          env,
+		AttachStdin:  stdin != "",
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("exec create in %s: %w", containerName, err)
+	}
+	attach, err := c.api.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return "", fmt.Errorf("exec attach in %s: %w", containerName, err)
+	}
+	defer attach.Close()
+
+	if stdin != "" {
+		if _, err := io.WriteString(attach.Conn, stdin); err != nil {
+			return "", fmt.Errorf("exec write stdin in %s: %w", containerName, err)
+		}
+		if err := attach.CloseWrite(); err != nil {
+			return "", fmt.Errorf("exec close stdin in %s: %w", containerName, err)
+		}
+	}
+
+	// Same demux + cap as Logs: exec streams are docker-multiplexed, and a
+	// runaway command must not balloon the caller.
+	var buf bytes.Buffer
+	limited := &limitedWriter{w: &buf, n: maxLogBytes}
+	if _, err := stdcopy.StdCopy(limited, limited, attach.Reader); err != nil && !errors.Is(err, errLogCap) {
+		return "", fmt.Errorf("exec read output in %s: %w", containerName, err)
+	}
+
+	// EOF on the stream means the process exited; inspect for its verdict.
+	insp, err := c.api.ContainerExecInspect(ctx, created.ID)
+	if err != nil {
+		return "", fmt.Errorf("exec inspect in %s: %w", containerName, err)
+	}
+	if insp.ExitCode != 0 {
+		return "", fmt.Errorf("exec in %s exited %d: %s", containerName, insp.ExitCode, strings.TrimSpace(buf.String()))
+	}
+	return buf.String(), nil
 }

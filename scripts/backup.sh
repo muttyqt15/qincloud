@@ -147,6 +147,25 @@ gzip "$rdb"
 upload_verified "$rdb.gz" "redis"
 prune_remote "redis"
 
+# users.acl — per-app ACL users (controld provision -redis): password hashes +
+# key-prefix rules. State the RDB does NOT carry; without it a box rebuild
+# leaves every app's stored REDIS_URL failing auth. Absent file = redis not
+# yet recreated with --aclfile (this script must stay green on both container
+# generations); empty file = no tenant users provisioned yet. Both mean
+# nothing to back up — and nothing to restore. The exec sits in an `if`
+# condition, so its non-zero exit skips cleanly instead of tripping the ERR trap.
+acl="$WORKDIR/redis-acl_${TS}.acl"
+if docker exec "$REDIS_CONTAINER" test -f /data/users.acl; then
+  docker cp -q "$REDIS_CONTAINER:/data/users.acl" "$acl"
+fi
+if [[ -s "$acl" ]]; then
+  gzip "$acl"
+  upload_verified "$acl.gz" "redis-acl"
+  prune_remote "redis-acl"
+else
+  log "users.acl missing or empty (no tenant redis users yet) — skipping"
+fi
+
 # --- publish success for the BackupStale alert --------------------------------
 # node-exporter's textfile collector scrapes /opt/qincloud/metrics (mounted
 # ro into the container); tmp+mv because the collector may read mid-write.

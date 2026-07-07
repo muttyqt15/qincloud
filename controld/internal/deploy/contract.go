@@ -19,7 +19,7 @@ type AppSpec struct {
 	ContainerPort int               // port the app listens on inside the container
 	Host          string            // hostname Caddy routes to this app, e.g. whoami.sparboard.com
 	Env           map[string]string // container environment; values may be secrets — render KEYS only
-	UseDB         bool              // attach tenant_db_net (shared Postgres reachable; redis is NOT on it)
+	UseDB         bool              // attach tenant_db_net (shared Postgres + Redis reachable)
 }
 
 var (
@@ -27,11 +27,21 @@ var (
 	envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
+// ValidateAppName is the single definition of a valid app name, shared with
+// provisioning: the postgres role/database and redis ACL user an app gets are
+// named after the app, so both sides must agree on the grammar.
+func ValidateAppName(name string) error {
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf("app name %q: must match %s", name, nameRe)
+	}
+	return nil
+}
+
 // Validate rejects a spec that would produce a broken deploy. Fail here,
 // loud, not three layers down in the Docker API.
 func (s AppSpec) Validate() error {
-	if !nameRe.MatchString(s.Name) {
-		return fmt.Errorf("app name %q: must match %s", s.Name, nameRe)
+	if err := ValidateAppName(s.Name); err != nil {
+		return err
 	}
 	if s.Image == "" {
 		return fmt.Errorf("app %s: image is required", s.Name)

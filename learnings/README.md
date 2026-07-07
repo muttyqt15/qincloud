@@ -64,6 +64,7 @@ The atomic, reusable principles the milestones keep hitting. These are the compo
 | [[the-box-is-disposable]] | The server is cattle, not a pet — the blueprint is what matters; you must be able to lose the box and rebuild it exactly. |
 | [[verify-the-artifact-under-test]] | Before debugging why a fix "doesn't work," confirm the running system is actually executing your fix — otherwise it's a hypothesis, not a fix. |
 | [[observe-what-matters]] | A metric or alert isn't done until you've seen it fire correctly, labelled the way a human asks the question. |
+| [[shared-data-services-tenancy]] | One shared Postgres/Redis, many principals: the network grants reachability, per-app credentials grant authorization, one command owns provisioning. |
 
 ## For agents
 

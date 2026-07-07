@@ -81,8 +81,10 @@ if ! command -v docker >/dev/null; then
 fi
 systemctl enable --now docker >/dev/null 2>&1
 
-# tenant_db_net carries ONLY postgres + the apps that request a database
-# (AppSpec.UseDB) — redis, exporters, and controld are never on it.
+# tenant_db_net carries ONLY the shared postgres + redis and the apps that
+# request a data service (AppSpec.UseDB) — exporters and controld are never
+# on it. Reachability only: authorization is the per-app credentials from
+# `controld provision`.
 log "docker bridge networks: app_net, data_net, tenant_db_net"
 for net in app_net data_net tenant_db_net; do
   docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null

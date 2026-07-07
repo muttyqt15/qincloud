@@ -9,6 +9,7 @@ the living rules of *what to do about it*, updated as the platform evolves.
 | [caddy.md](caddy.md) | Edge routing, admin API, auto-HTTPS |
 | [alerting.md](alerting.md) | Prometheus → Alertmanager → Discord pipeline |
 | [backups-r2.md](backups-r2.md) | rclone, R2 credentials, restore rules |
+| [data-services.md](data-services.md) | Shared Postgres/Redis tenancy, `controld provision`, ACLs |
 | [deploys.md](deploys.md) | controld state machine invariants |
 | [dashboard.md](dashboard.md) | M5 web dashboard: auth model, polling, htmx |
 | [host.md](host.md) | Ubuntu 24.04 baseline, UFW vs Docker |

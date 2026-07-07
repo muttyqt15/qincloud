@@ -24,8 +24,8 @@ services:
     networks:
       - data_net
       # tenant apps deployed with -db reach postgres here; per-role passwords
-      # do the authorization, this network does the reachability. Redis is
-      # deliberately NOT on it.
+      # (controld provision -postgres) do the authorization, this network does
+      # the reachability.
       - tenant_db_net
     # default 64mb /dev/shm stalls parallel workers and big sorts
     shm_size: 128mb
@@ -38,30 +38,72 @@ services:
       retries: 5
       start_period: 30s
 
+  # One-shot: converge the aclfile before redis starts. TWO reasons it must
+  # exist and carry a `user default` line (runbooks/gotchas/data-services.md):
+  # redis REFUSES to boot when its configured aclfile is missing, and at boot
+  # the aclfile REPLACES the whole user table — a file without a default line
+  # leaves the default user PASSWORDLESS (requirepass is ignored entirely
+  # when an aclfile is configured; verified live on 7.4.2 during rollout).
+  # So this init rewrites exactly the default line from REDIS_PASSWORD on
+  # every up, making .env the single owner of the platform password, and
+  # never touches the tenant user lines that controld provision manages.
+  redis-acl-init:
+    image: redis:7.4.2-alpine
+    restart: "no"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in /opt/qincloud/.env}
+    entrypoint:
+      - sh
+      - -ec
+      # $$ so the vars are the container's, not compose interpolation
+      - |
+        hash=$$(printf %s "$$REDIS_PASSWORD" | sha256sum | cut -d" " -f1)
+        touch /data/users.acl
+        grep -v "^user default " /data/users.acl > /data/.users.acl.tmp || true
+        printf 'user default on #%s ~* &* +@all\n' "$$hash" >> /data/.users.acl.tmp
+        mv /data/.users.acl.tmp /data/users.acl
+        chown redis:redis /data/users.acl
+        chmod 600 /data/users.acl
+    volumes:
+      - redisdata:/data
+
   redis:
     image: redis:7.4.2-alpine
     # fixed name: scripts/backup.sh targets the container by name
     container_name: qincloud-redis
     restart: unless-stopped
+    depends_on:
+      redis-acl-init:
+        condition: service_completed_successfully
     # AOF on: RDB snapshots alone can lose everything since the last save.
-    # requirepass: every app container on data_net can reach redis — without
-    # auth any one of them could FLUSHALL or read another app's keys
+    # Auth lives ENTIRELY in the aclfile (seeded by redis-acl-init above):
+    # the default user is the platform admin identity (healthcheck,
+    # backup.sh, exporter); tenant apps authenticate as per-app ACL users
+    # (controld provision -redis) confined to their own <app>:* key prefix.
+    # No --requirepass on purpose — with an aclfile it is dead config, and a
+    # dead knob that looks like the password owner is how a rotation silently
+    # doesn't happen. Rotate by updating .env then `docker compose up -d`
+    # (recreate re-runs the init, which converges the default line).
     command:
       [
         "redis-server",
         "--appendonly", "yes",
-        "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in /opt/qincloud/.env}",
+        "--aclfile", "/data/users.acl",
         "--maxmemory", "256mb",
         "--maxmemory-policy", "noeviction",
       ]
     environment:
-      # redis-cli auto-authenticates from this — keeps the healthcheck and the
-      # docker-exec redis-cli calls in scripts/backup.sh working unchanged
+      # redis-cli auto-authenticates from this — keeps the healthcheck, the
+      # docker-exec redis-cli calls in scripts/backup.sh, and controld's
+      # provisioning execs working without ever putting the password in argv
       REDISCLI_AUTH: ${REDIS_PASSWORD}
     volumes:
       - redisdata:/data
     networks:
       - data_net
+      # tenant apps deployed with -db reach redis here; per-app ACL users do
+      # the authorization, this network does the reachability
+      - tenant_db_net
     # headroom above maxmemory for the fork/COW spike during BGSAVE
     mem_limit: 384m
     healthcheck:

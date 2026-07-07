@@ -98,11 +98,23 @@ Order matters; each step fails loud if a dependency is missing.
    real cluster). Fetch the newest `postgres/_globals/` and per-database
    `postgres/<db>/` objects (rclone env config as in `backup.sh`), `psql`
    the globals (errors on pre-existing roles are noise; the ALTER ROLEs
-   reset passwords to the backed-up values), then restore each database
-   INTO the one initdb already created — not `--create`:
+   reset passwords to the backed-up values). Restores go INTO an existing
+   database — not `--create` — and a fresh initdb only has `controld`, so
+   first re-create each TENANT database with its lockdown (the
+   PUBLIC-connect revoke is a pg_database ACL no dump carries):
+   `psql -c 'CREATE DATABASE <app> OWNER <app>' -c 'REVOKE CONNECT ON DATABASE <app> FROM PUBLIC'`.
+   Then per database:
    `pg_restore --clean --if-exists --no-owner --role=<owning-role> -d <db>`
    (`--no-owner --role=controld` also migrates dumps taken under an older
    superuser-owned layout onto the dedicated role).
+   Also restore the redis ACL users (per-app credentials from `controld
+   provision -redis` — without them every stored `REDIS_URL` fails auth):
+   fetch the newest `redis-acl/` object, then
+   `docker cp <users.acl> qincloud-redis:/data/users.acl && docker exec
+   qincloud-redis redis-cli ACL LOAD`. (`redis-acl/` legitimately absent =
+   no tenant redis user ever provisioned; if a restored spec carries a
+   `REDIS_URL` yet the prefix is missing, re-key via `provision -redis
+   -rotate` — see `runbooks/data-services.md` DR section.)
 7. **stack/observability** — up; then install the backup schedule:
    `cp scripts/systemd/qincloud-backup.* /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now qincloud-backup.timer`
 8. **stack/controld** — up (`--build`). `controld list` shows which apps the

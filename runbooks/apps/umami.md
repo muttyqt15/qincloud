@@ -17,14 +17,18 @@
 
 ## Provisioning pattern (for the next DB-backed app)
 
+Superseded by `controld provision` (2026-07-07) — one command creates the
+role + database (and, with `-redis`, an ACL user) and prints the URL to pass
+via `deploy -env`:
+
 ```sh
-UPW=$(openssl rand -hex 24)
-printf "CREATE ROLE <app> LOGIN PASSWORD :'pw';\nCREATE DATABASE <app> OWNER <app>;\n" \
-  | docker exec -i qincloud-postgres psql -U qincloud -d postgres -v ON_ERROR_STOP=1 -v pw="$UPW"
+docker exec qincloud-controld controld provision -app <app> -postgres
 ```
 
-psql gotcha: `-c` commands do NOT interpolate `-v` variables — pipe SQL via
-stdin (as above and in `stack/data/initdb/01-controld.sh`).
+Full guide incl. migration and rotation: [`../data-services.md`](../data-services.md).
+Umami itself predates the command but has the identical shape (role `umami`,
+database `umami`); the PUBLIC-connect revoke was applied to it as one-time
+hardening on 2026-07-07.
 
 ## DR
 

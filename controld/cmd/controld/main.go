@@ -5,6 +5,7 @@
 //	deploy -app X -image Y -port N -host H  run one deploy to live
 //	list                                    apps and their live containers
 //	destroy -app X                          remove route, containers, record
+//	provision -app X [-postgres] [-redis]   per-app credentials on the shared data services
 //
 // Drive it via: docker exec qincloud-controld controld <cmd> ...
 package main
@@ -24,6 +25,7 @@ import (
 	"qincloud/controld/internal/dashboard"
 	"qincloud/controld/internal/deploy"
 	"qincloud/controld/internal/dockerx"
+	"qincloud/controld/internal/provision"
 	"qincloud/controld/internal/store"
 )
 
@@ -44,6 +46,8 @@ func main() {
 		err = listCmd()
 	case "destroy":
 		err = destroyCmd(os.Args[2:])
+	case "provision":
+		err = provisionCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -53,14 +57,17 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: controld <serve | deploy | redeploy | list | destroy>
+	fmt.Fprintln(os.Stderr, `usage: controld <serve | deploy | redeploy | list | destroy | provision>
   serve
-  deploy   -app <name> -image <ref> -port <containerPort> -host <hostname>
-           [-db] [-env KEY=VALUE ...]
-  redeploy -app <name>   re-run the STORED spec (env included) — the safe way
-                         to restore routes after a caddy reload or rebuild
+  deploy    -app <name> -image <ref> -port <containerPort> -host <hostname>
+            [-db] [-env KEY=VALUE ...]
+  redeploy  -app <name>   re-run the STORED spec (env included) — the safe way
+                          to restore routes after a caddy reload or rebuild
   list
-  destroy  -app <name>`)
+  destroy   -app <name>
+  provision -app <name> [-postgres] [-redis] [-rotate]
+            per-app credentials on the shared data services; prints the URLs
+            ONCE — pass them to the app via deploy -db -env`)
 	os.Exit(2)
 }
 
@@ -126,7 +133,7 @@ func deployCmd(args []string) error {
 	fs.StringVar(&spec.Image, "image", "", "image ref")
 	fs.IntVar(&spec.ContainerPort, "port", 0, "port the app listens on in the container")
 	fs.StringVar(&spec.Host, "host", "", "hostname to route to this app")
-	fs.BoolVar(&spec.UseDB, "db", false, "attach tenant_db_net (shared Postgres reachable)")
+	fs.BoolVar(&spec.UseDB, "db", false, "attach tenant_db_net (shared Postgres + Redis reachable)")
 	fs.Func("env", "KEY=VALUE container env (repeatable)", func(v string) error {
 		k, val, ok := strings.Cut(v, "=")
 		if !ok || k == "" {
@@ -210,6 +217,53 @@ func listCmd() error {
 			a.Name, a.Host, a.Image, cid, a.UpdatedAt.Format(time.RFC3339))
 	}
 	return w.Flush()
+}
+
+// provisionCmd creates (or, with -rotate, re-keys) an app's credentials on
+// the shared data services and prints the resulting URLs — the ONLY time the
+// generated passwords are ever shown. Each URL prints the moment it exists,
+// so a postgres success is not lost when a later redis step fails. Wiring is
+// docker-only: provisioning execs into the data containers and needs neither
+// the store nor the edge router.
+func provisionCmd(args []string) error {
+	fs := flag.NewFlagSet("provision", flag.ExitOnError)
+	app := fs.String("app", "", "app name ([a-z0-9-])")
+	pg := fs.Bool("postgres", false, "provision a postgres role + database named after the app")
+	rd := fs.Bool("redis", false, "provision a redis ACL user confined to the <app>:* key prefix")
+	rotate := fs.Bool("rotate", false, "re-key an already-provisioned service (old URL stops working)")
+	_ = fs.Parse(args) // ExitOnError: Parse never returns an error
+	if *app == "" {
+		return fmt.Errorf("-app is required")
+	}
+	if !*pg && !*rd {
+		return fmt.Errorf("nothing to provision: pass -postgres, -redis, or both")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	dk, err := dockerx.New()
+	if err != nil {
+		return fmt.Errorf("docker: %w", err)
+	}
+	defer dk.Close()
+	p := provision.New(dk)
+
+	if *pg {
+		url, err := p.Postgres(ctx, *app, *rotate)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("DATABASE_URL=%s\n", url)
+	}
+	if *rd {
+		url, err := p.Redis(ctx, *app, *rotate)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("REDIS_URL=%s\n", url)
+	}
+	log.Printf("shown once — store in the app spec: controld deploy -app %s ... -db -env <URL>", *app)
+	return nil
 }
 
 func destroyCmd(args []string) error {

@@ -24,8 +24,20 @@ set -eu
 
 # :'pw' is psql variable quoting — the password is passed as a psql variable,
 # never interpolated by the shell or the SQL text, so any character is safe.
-psql -v ON_ERROR_STOP=1 -v pw="$CONTROLD_DB_PASSWORD" \
+#
+# The REVOKEs close PUBLIC's default CONNECT (postgres grants it to everyone
+# on every connectable database): tenant roles must not be able to connect to
+# the control-plane database, the superuser's, or template1. Tenant databases
+# get the same revoke from `controld provision` at creation time; these four
+# exist before provision ever runs, so they are hardened here — on every
+# fresh volume, which is what makes the lockdown survive an M8 rebuild
+# (runbooks/gotchas/data-services.md).
+psql -v ON_ERROR_STOP=1 -v pw="$CONTROLD_DB_PASSWORD" -v superdb="$POSTGRES_USER" \
 	--username "$POSTGRES_USER" --dbname postgres <<'EOSQL'
 CREATE ROLE controld LOGIN PASSWORD :'pw';
 CREATE DATABASE controld OWNER controld;
+REVOKE CONNECT ON DATABASE controld FROM PUBLIC;
+REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
+REVOKE CONNECT ON DATABASE :"superdb" FROM PUBLIC;
+REVOKE CONNECT ON DATABASE template1 FROM PUBLIC;
 EOSQL
