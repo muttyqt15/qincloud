@@ -19,8 +19,9 @@ RUN git clone https://github.com/jackyzha0/quartz.git . \
  && git checkout "${QUARTZ_REF}"
 RUN npm ci
 
-# Our config replaces Quartz's default; the vault replaces Quartz's sample content.
+# Our config + layout replace Quartz's defaults; the vault replaces its sample content.
 COPY sites/notes/quartz.config.ts ./quartz.config.ts
+COPY sites/notes/quartz.layout.ts ./quartz.layout.ts
 RUN rm -rf content && mkdir content
 COPY learnings/ ./content/
 # The vault's entry note (README = the Map of Content) becomes the homepage.
