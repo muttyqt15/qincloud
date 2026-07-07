@@ -95,9 +95,10 @@ func serve() error {
 	svc, err := buildAuthoring(authCtx, dk, d)
 	authCancel()
 	if err != nil {
-		return fmt.Errorf("authoring: %w", err)
-	}
-	if svc != nil {
+		// The editor is optional; a setup hiccup (clone/egress failure, a bad
+		// token) must never take the control plane down. Serve without it.
+		log.Printf("notes editor disabled: %v", err)
+	} else if svc != nil {
 		dash.WithAuthoring(svc)
 		log.Println("notes editor enabled at /edit")
 	}
