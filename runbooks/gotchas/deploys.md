@@ -77,3 +77,23 @@ built yet.
 - Docker module pin: classic `github.com/docker/docker@v28.x+incompatible`;
   `@latest` resolves to the relocated `github.com/moby/moby/client` and
   breaks the build.
+
+## An operator script killed mid-deploy strands a remote deploy holding the lock
+
+Learned 2026-07-07 (piko v4): `deploy-piko.sh` was killed on the laptop while
+its `ssh … docker exec controld deploy` was still running — the REMOTE deploy
+survives the ssh disconnect and kept the app lock for ~30 min (it was stuck in
+`pull` on an image whose push had hung on the SAME laptop; two failures, one
+cause). Diagnosis: `docker exec qincloud-controld ps aux | grep "controld
+deploy"`. Recovery: kill that PID, then `controld redeploy -app <name>` —
+NEVER hand-surgery on containers/routes.
+
+## Container names carry the deploy ROW id — do not read them as "newest = mine"
+
+`qc-piko-45` was the LIVE v3 container (deploy row 45), not the stuck v4
+deploy's product (a deploy stuck in `pull` has created NO container yet). A
+`docker rm -f qc-…` based on that misread took prod down: Caddy's route kept
+dialing the removed name (502) while the record looked fine. Map name → row
+via `select id, image, status from deploys` before touching ANY qc-*
+container; better, don't touch them — `controld redeploy` heals route +
+container + record from the stored spec in one move.
