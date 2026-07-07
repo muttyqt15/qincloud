@@ -43,7 +43,9 @@ The build, in order. Each is one note: the narrative *and* the teaching.
 | M4 | [[m4-controld-deploy-engine]] | The only bespoke code: a Go state machine that deploys apps, whose single rule is *a failed deploy never takes down what was already running*. |
 | M5 | [[m5-dashboard]] | A server-rendered dashboard with no JS framework — server draws the page, htmx re-fetches slices, all state in one Postgres table. |
 | M6 | [[m6-first-app-umami]] | Go from "deploys a toy container" to running a real stateful product — which forces the deploy contract to grow secrets and a database. |
+| M7 | [[m7-slos-and-burn-alerts]] | Set a numeric 99.5% promise per app and page on *error-budget burn rate*, not every blip — using an up-ratio SLI because Caddy exposes no request metrics here. |
 | M8 | [[m8-disaster-recovery]] | Deliberately destroy the whole server, then rebuild it from script, git, and offsite backups in ~12 minutes — proving the disposability claim. |
+| M9 | [[m9-failure-drills-postmortems]] | Catalogue every way the platform breaks, mark honestly which ones page today — then close the gaps that audit reveals and drill one live. |
 | Extra | [[x1-public-dashboard-cloudflare]] | Put the box-deleting dashboard on the public internet behind three independent locks — and the afternoon a stale config file stole. |
 | Extra | [[x2-per-app-observability]] | Answer "how much is *this one app* using, and what is it logging?" after the standard container-metrics agent went silent on Docker 29. |
 | Extra | [[x3-verified-edge-deploys]] | One idempotent command that applies an edge config change and *proves* it — validate, heal the mount, reload, restore routes, confirm each site responds. |
