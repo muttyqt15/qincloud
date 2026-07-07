@@ -45,11 +45,19 @@ just static files).
 ## Known behavior
 
 - **First boot does real work**: shallow clone of the Pikira repo (GitHub
-  egress), `alembic upgrade head`, then a live LLM preflight call (OpenRouter
-  egress). The image HAS a HEALTHCHECK (GET / every 10s, start-period 30s),
-  so controld gates the route on genuine readiness — but a boot needs both
-  GitHub and OpenRouter reachable or the container crash-loops (fail-loud by
+  egress, ~6s), `alembic upgrade head`, then a live LLM preflight call
+  (OpenRouter egress). The image HAS a HEALTHCHECK (GET / every 10s,
+  start-period 30s), so controld gates the route on genuine readiness.
+  GitHub must be reachable or the container crash-loops (fail-loud by
   design; check `docker logs qc-piko-<id>`).
+- **Boot vs the 60s WaitReady window** (learned 2026-07-07, two failed
+  rolls): the preflight LLM call originally had no timeout, so a slow
+  provider blew controld's 60s readiness deadline — deploy failed safely
+  (old container kept serving) but rolls were a coin flip. Fixed in piko
+  (`PREFLIGHT_TIMEOUT=20s`: slow provider → warn + serve; a genuinely bad
+  route still errors fast and refuses to serve). Worst-case boot is now
+  ~40s. If piko ever gains another boot-time network call, bound it — the
+  60s window is a platform constant (`deploy.go`).
 - The Pikira checkout lives at `/app/.piko/pikira` INSIDE the container
   (ephemeral, re-cloned each boot) — nothing to back up.
 - Bot and API share the container; the bot talks to the API over
