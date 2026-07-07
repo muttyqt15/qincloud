@@ -10,8 +10,11 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/controld ./cmd/controld
 
-# alpine (not scratch): busybox wget for the compose healthcheck.
+# alpine (not scratch): busybox wget for the compose healthcheck, plus git +
+# ca-certificates for the notes web editor — it clones/pulls/pushes the mirror
+# over https and builds the notes image on the daemon (see internal/authoring).
 FROM alpine:3.22.5
+RUN apk add --no-cache git ca-certificates
 COPY --from=build /out/controld /usr/local/bin/controld
 # Deliberately root, no USER: the container mounts docker.sock (host-root-
 # equivalent regardless of in-container uid) and Caddy's root-owned admin

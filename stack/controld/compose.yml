@@ -26,6 +26,15 @@ services:
       # and the edge router. Nothing else on the box gets either.
       - /var/run/docker.sock:/var/run/docker.sock
       - caddy_admin:/run/caddy
+      # notes web editor: a self-contained working clone of the mirror the
+      # editor writes into (reconstructable — controld re-clones on first boot).
+      - notes_repo:/workspace
+    secrets:
+      # notes web editor: a token with contents:write + packages:write on the
+      # mirror (git push + ghcr push). An EMPTY file disables the editor and
+      # controld runs exactly as before; write the real token in and recreate
+      # controld to enable it. See runbooks/apps/notes-editor.md.
+      - gh_token
     ports:
       - "${TS_IP:?}:8600:8600" # Tailscale-only; M5 dashboard mounts here
     networks:
@@ -41,7 +50,10 @@ services:
       # edge) and prometheus scrapes /metrics. Deliberately NOT app_net —
       # tenant workloads must never reach a docker.sock-holding service.
       - admin_net
-    mem_limit: 128m
+    # 256m (was 128m): the notes editor tars the repo as a build context and
+    # runs git in-process. The Quartz build itself runs on the daemon, not in
+    # this cgroup, but the context stream + git clone/pull want the headroom.
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8600/healthz"]
       interval: 30s
@@ -57,3 +69,10 @@ networks:
 volumes:
   caddy_admin:
     external: true # created and owned by stack/edge
+  notes_repo: {} # controld's working clone for the notes editor; re-cloneable
+
+secrets:
+  gh_token:
+    # Create it before enabling the editor (empty to keep it disabled):
+    #   install -m 600 /dev/null /opt/qincloud/secrets/gh_token   # then paste the token
+    file: ${QC_SECRETS_DIR:-/opt/qincloud/secrets}/gh_token

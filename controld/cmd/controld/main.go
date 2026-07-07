@@ -88,7 +88,20 @@ func serve() error {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	dashboard.New(st, d, dk).Register(mux)
+	dash := dashboard.New(st, d, dk)
+	// The notes editor is opt-in by secret; ensuring its working clone can
+	// take a beat on first boot, so it gets its own budget, not wire's 30s.
+	authCtx, authCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	svc, err := buildAuthoring(authCtx, dk, d)
+	authCancel()
+	if err != nil {
+		return fmt.Errorf("authoring: %w", err)
+	}
+	if svc != nil {
+		dash.WithAuthoring(svc)
+		log.Println("notes editor enabled at /edit")
+	}
+	dash.Register(mux)
 	srv := &http.Server{
 		Addr:    ":8600",
 		Handler: mux,

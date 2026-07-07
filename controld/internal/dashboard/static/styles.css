@@ -185,3 +185,49 @@ select { background: var(--panel); border: 1px solid var(--border); border-radiu
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; animation: qc-spin 0.6s linear infinite; }
 #image-spin { flex: 0 0 auto; margin-top: 0.15rem; color: var(--accent); }
 @keyframes qc-spin { to { transform: rotate(360deg); } }
+
+/* --- notes editor (/edit) -------------------------------------------------- */
+.toolbar-actions { display: flex; align-items: center; gap: 0.6rem; }
+
+.editor { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: 1.2rem; }
+
+.note-list { border-right: 1px solid var(--border); padding-right: 1rem; max-height: 70vh; overflow-y: auto; }
+.note-list .note-new { display: inline-block; margin-bottom: 0.8rem; color: var(--accent); text-decoration: none; font-weight: 600; }
+.note-list ul { list-style: none; margin: 0; padding: 0; }
+.note-list li { margin-bottom: 0.7rem; display: flex; flex-direction: column; gap: 0.1rem; }
+.note-list li a { color: var(--text); text-decoration: none; }
+.note-list li a:hover { color: var(--accent); }
+.note-list li .mono { font-size: 0.75rem; }
+
+.note-form { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+.note-form > label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.9rem; }
+.note-form input[name="path"] {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 0.5rem 0.6rem; font-family: ui-monospace, monospace;
+}
+
+.editor-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; min-height: 55vh; }
+#md-src {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 0.8rem; resize: vertical; min-height: 55vh;
+  font-family: ui-monospace, SFMono-Regular, monospace; font-size: 13px; line-height: 1.55;
+}
+.md-preview {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.8rem 1.1rem; overflow-y: auto; min-height: 55vh;
+}
+.md-preview h1, .md-preview h2, .md-preview h3 { margin: 0.6em 0 0.3em; line-height: 1.25; }
+.md-preview h1 { font-size: 1.7rem; }
+.md-preview h2 { font-size: 1.35rem; }
+.md-preview h3 { font-size: 1.1rem; }
+.md-preview p { margin: 0.5em 0; }
+.md-preview code { background: var(--bg); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; }
+.md-preview pre { background: var(--bg); padding: 0.8rem; border-radius: 6px; overflow-x: auto; }
+.md-preview pre code { background: none; padding: 0; }
+.md-preview a { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .editor { grid-template-columns: 1fr; }
+  .editor-panes { grid-template-columns: 1fr; }
+  .note-list { border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 1rem; }
+}

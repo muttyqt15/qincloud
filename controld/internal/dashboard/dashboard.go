@@ -23,6 +23,7 @@ import (
 
 	"github.com/a-h/templ"
 
+	"qincloud/controld/internal/authoring"
 	"qincloud/controld/internal/deploy"
 )
 
@@ -74,6 +75,16 @@ type Runtime interface {
 	ResolveImage(ctx context.Context, ref string) (deploy.ImageInfo, error)
 }
 
+// Authoring is the notes-editor surface — implemented by *authoring.Service.
+// Optional: the editor is only mounted when a service is set (WithAuthoring),
+// which happens only when controld is given a git token. SaveNote is slow (it
+// rebuilds and redeploys the site), so the handler runs it off the request.
+type Authoring interface {
+	ListNotes() ([]authoring.Note, error)
+	ReadNote(rel string) (string, error)
+	SaveNote(ctx context.Context, rel, content string) error
+}
+
 // Deployer is the action surface — implemented by *deploy.Deployer.
 type Deployer interface {
 	Deploy(ctx context.Context, spec deploy.AppSpec) error
@@ -86,14 +97,23 @@ type Deployer interface {
 }
 
 type Server struct {
-	store    Store
-	deployer Deployer
-	runtime  Runtime
-	fastFail time.Duration // fastFailWindow; tests shrink it
+	store     Store
+	deployer  Deployer
+	runtime   Runtime
+	authoring Authoring     // nil unless WithAuthoring set it; gates the /edit routes
+	fastFail  time.Duration // fastFailWindow; tests shrink it
 }
 
 func New(st Store, d Deployer, rt Runtime) *Server {
 	return &Server{store: st, deployer: d, runtime: rt, fastFail: fastFailWindow}
+}
+
+// WithAuthoring enables the notes editor. Kept separate from New so the common
+// wiring (and every existing test) is untouched, and so a disabled editor is a
+// genuinely nil interface — never a typed-nil that would pass a != nil check.
+func (s *Server) WithAuthoring(a Authoring) *Server {
+	s.authoring = a
+	return s
 }
 
 //go:embed static
@@ -114,6 +134,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /deploy", requireHtmx(s.deploy))
 	mux.HandleFunc("POST /apps/{name}/redeploy", requireHtmx(s.redeploy))
 	mux.HandleFunc("POST /apps/{name}/destroy", requireHtmx(s.destroy))
+
+	// The notes editor is mounted only when authoring is wired (a git token is
+	// present) — otherwise /edit does not exist at all.
+	if s.authoring != nil {
+		mux.HandleFunc("GET /edit", s.editor)
+		mux.HandleFunc("POST /edit", requireHtmx(s.saveNote))
+	}
 }
 
 // requireHtmx gates every state-changing route on the HX-Request header.
@@ -296,6 +323,62 @@ func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render(w, r, Flash(name+" destroyed"))
+}
+
+// --- notes editor (mounted only when authoring is wired) ---------------------
+
+// editor renders the edit page: the list of notes to pick from, and — when
+// ?path= names one — its current content loaded for editing. A path that
+// doesn't resolve is not an error: it becomes a new note at that path, so the
+// same page both edits and creates.
+func (s *Server) editor(w http.ResponseWriter, r *http.Request) {
+	notes, err := s.authoring.ListNotes()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	rel := strings.TrimSpace(r.URL.Query().Get("path"))
+	var content string
+	if rel != "" {
+		if c, readErr := s.authoring.ReadNote(rel); readErr == nil {
+			content = c
+		}
+	}
+	render(w, r, EditorPage(notes, rel, content))
+}
+
+// saveNote writes, commits, and publishes a note. Publishing rebuilds and
+// redeploys the site (~a minute), so it runs off the request: the operator gets
+// an immediate "publishing…" and the outcome shows on the notes app in the
+// dashboard (the publish deploys through the normal state machine). A failure
+// after the handoff is recorded on that deploy and logged box-side.
+func (s *Server) saveNote(w http.ResponseWriter, r *http.Request) {
+	rel := strings.TrimSpace(r.FormValue("path"))
+	content := r.FormValue("content")
+	if rel == "" {
+		flashError(w, r, fmt.Errorf("a note path is required (e.g. notes/my-note.md)"))
+		return
+	}
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), deployBudget)
+		defer cancel()
+		err := s.authoring.SaveNote(ctx, rel, content)
+		if err != nil {
+			log.Printf("dashboard: publish %s failed: %v", rel, err)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			flashError(w, r, err)
+			return
+		}
+		render(w, r, Flash(rel+" saved and published"))
+	case <-time.After(s.fastFail):
+		render(w, r, Flash("publishing "+rel+" — the site rebuilds in ~a minute; watch the notes app below"))
+	}
 }
 
 // runAsync starts the deploy/redeploy in the background and waits fastFail

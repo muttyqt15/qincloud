@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"qincloud/controld/internal/authoring"
 	"qincloud/controld/internal/deploy"
 )
 
@@ -37,7 +38,10 @@ templ IndexPage(apps []deploy.App, latest map[string]deploy.DeployRecord, now ti
 	@layout("qincloud — apps") {
 		<section class="toolbar">
 			<h2>apps</h2>
-			<button class="primary" onclick="qcDeployOpen()">+ Deploy app</button>
+			<div class="toolbar-actions">
+				<a class="ghost" href="/edit">✎ edit notes</a>
+				<button class="primary" onclick="qcDeployOpen()">+ Deploy app</button>
+			</div>
 		</section>
 		<div id="flash"></div>
 		<!--
@@ -290,6 +294,57 @@ templ HistoryTable(deploys []deploy.DeployRecord, now time.Time) {
 				}
 			</tbody>
 		</table>
+	}
+}
+
+// EditorPage is the notes editor: a picker of existing notes on the left, and a
+// Markdown textarea with a live client-side preview on the right. Saving posts
+// to /edit, which writes + commits + publishes; the preview is only an
+// approximation — the authoritative render is Quartz on publish.
+templ EditorPage(notes []authoring.Note, currentRel, content string) {
+	@layout("qincloud — edit notes") {
+		<section class="toolbar">
+			<h2>edit notes</h2>
+			<a class="ghost" href="/">← apps</a>
+		</section>
+		<div id="flash"></div>
+		<div class="editor">
+			<aside class="note-list">
+				<a class="note-new" href="/edit">+ new note</a>
+				<ul>
+					for _, n := range notes {
+						<li>
+							<a href={ templ.URL("/edit?path=" + n.Rel) }>{ n.Title }</a>
+							<span class="muted mono">{ n.Rel }</span>
+						</li>
+					}
+				</ul>
+			</aside>
+			<form
+				class="note-form"
+				hx-post="/edit"
+				hx-target="#flash"
+				hx-swap="innerHTML"
+				hx-disabled-elt="find button[type='submit']"
+			>
+				<label>
+					Path <span class="muted">(under learnings/, ends in .md)</span>
+					<input name="path" value={ currentRel } placeholder="notes/my-note.md" required/>
+				</label>
+				<div class="editor-panes">
+					<textarea name="content" id="md-src" spellcheck="false" placeholder="# boom">{ content }</textarea>
+					<div id="md-preview" class="md-preview" aria-live="polite"></div>
+				</div>
+				<div class="modal-foot">
+					<button type="submit" class="primary">
+						<span class="btn-label">Save &amp; publish</span>
+						<span class="spin htmx-indicator" aria-hidden="true"></span>
+					</button>
+					<span class="muted">publishing rebuilds the site (~a minute)</span>
+				</div>
+			</form>
+		</div>
+		<script src="/static/editor.js" defer></script>
 	}
 }
 
